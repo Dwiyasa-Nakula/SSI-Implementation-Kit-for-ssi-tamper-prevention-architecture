@@ -71,7 +71,7 @@ items:
         - port: 4000
         - port: 3000
 
-  # --- REDIS STORE (Pinned) ---
+  # --- REDIS STORE ---
   - apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -109,7 +109,7 @@ items:
         app: redis-store
       ports: [{port: 6379}]
 
-  # --- POSTGRES (Pinned) ---
+  # --- POSTGRES ---
   - apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -164,7 +164,7 @@ items:
         app: wallet-db
       ports: [{port: 5432}]
 
-  # --- TRANSPARENCY LOG (Pinned) ---
+  # --- TRANSPARENCY LOG ---
   - apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -260,9 +260,14 @@ items:
     spec:
       selector:
         app: issuer-agent
-      ports: [{port: 8000}, {port: 8001}]
+      # FIX: Added 'name' to each port to satisfy Kubernetes requirement for multi-port services
+      ports: 
+      - port: 8000
+        name: http
+      - port: 8001
+        name: admin
 
-  - apiVersion: autoscaling/v2
+  - apiVersion: autoscaling/v1
     kind: HorizontalPodAutoscaler
     metadata:
       name: issuer-hpa
@@ -274,13 +279,7 @@ items:
         name: issuer-agent
       minReplicas: 2
       maxReplicas: 10
-      metrics:
-      - type: Resource
-        resource:
-          name: cpu
-          target:
-            type: Utilization
-            averageUtilization: 70
+      targetCPUUtilizationPercentage: 70
 
   # --- GOVERNANCE SERVICE ---
   - apiVersion: apps/v1
@@ -289,7 +288,7 @@ items:
       name: governance-service
       namespace: ssi-network
     spec:
-      replicas: 2
+      replicas: 3
       selector:
         matchLabels:
           app: governance-service
@@ -337,7 +336,7 @@ items:
       name: verification-gateway
       namespace: ssi-network
     spec:
-      replicas: 2
+      replicas: 3
       selector:
         matchLabels:
           app: verification-gateway
@@ -414,7 +413,7 @@ items:
                   name: ssi-secrets
                   key: WALLET_CREDS
 
-  - apiVersion: autoscaling/v2
+  - apiVersion: autoscaling/v1
     kind: HorizontalPodAutoscaler
     metadata:
       name: gateway-hpa
@@ -424,15 +423,9 @@ items:
         apiVersion: apps/v1
         kind: Deployment
         name: verification-gateway
-      minReplicas: 2
+      minReplicas: 3
       maxReplicas: 15
-      metrics:
-      - type: Resource
-        resource:
-          name: cpu
-          target:
-            type: Utilization
-            averageUtilization: 60
+      targetCPUUtilizationPercentage: 60
 
   - apiVersion: v1
     kind: Service
@@ -445,20 +438,18 @@ items:
       ports: [{port: 4000}]
 
   # --- INGRESS (LOAD BALANCER) ---
-  # NEW: Exposes services securely to the outside world
   - apiVersion: networking.k8s.io/v1
     kind: Ingress
     metadata:
       name: ssi-ingress
       namespace: ssi-network
       annotations:
-        # Menggunakan NGINX sebagai Ingress Controller
-        kubernetes.io/ingress.class: nginx
         # Limit ukuran body untuk mencegah DoS (selain rate limit aplikasi)
         nginx.ingress.kubernetes.io/proxy-body-size: "10m"
         # Rewrite path: /api/vg/verify -> /verify
         nginx.ingress.kubernetes.io/rewrite-target: /$2
     spec:
+      ingressClassName: nginx
       rules:
       - http:
           paths:
