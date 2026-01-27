@@ -121,3 +121,11 @@ process.on('SIGTERM', async () => {
         redisClient.quit().then(() => process.exit(0));
     });
 });
+
+// Health Check
+app.get('/health', (req, res) => { res.status(200).send('OK'); });
+
+const PORT = 3000;
+app.listen(PORT, () => {
+    console.log(`Governance Service running on port ${PORT}`);
+});

@@ -38,10 +38,18 @@ if (!JWT_SECRET) {
 const redisClient = createClient({ url: REDIS_URL });
 redisClient.on('error', (err) => console.error('[Redis] Client Error', err));
 
+// Ensure the Redis client is connected before starting the app
+redisClient.connect().then(() => {
+    console.log("Redis client connected");
+}).catch(err => {
+    console.error("Redis connection failed:", err);
+    process.exit(1); // Ensure your app doesn't start if Redis isn't connected
+});
+
 // --- RATE LIMITING ---
 const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 1000, 
+    windowMs: 15 * 60 * 1000,  // 15 minutes
+    max: 1000,  // limit each IP to 1000 requests per windowMs
     standardHeaders: true,
     legacyHeaders: false,
     store: new RedisStore({
@@ -49,6 +57,8 @@ const limiter = rateLimit({
     }),
     message: { error: 'Too many requests' }
 });
+
+// Wait for Redis to be connected before applying the middleware
 app.use(limiter);
 
 // --- AUTH MIDDLEWARE ---
@@ -144,7 +154,6 @@ app.use((err, req, res, next) => {
 
 // --- SERVER STARTUP & GRACEFUL SHUTDOWN ---
 const server = app.listen(4000, async () => {
-    await redisClient.connect();
     console.log('Verification Gateway running on port 4000');
 });
 
@@ -156,6 +165,17 @@ process.on('SIGTERM', async () => {
         redisClient.quit().then(() => {
             console.log('Redis connection closed.');
             process.exit(0);
+        }).catch((err) => {
+            console.error('Error closing Redis connection', err);
+            process.exit(1); // Ensure the app exits properly even if there is an error with Redis
         });
     });
+});
+
+// Health Check
+app.get('/health', (req, res) => { res.status(200).send('OK'); });
+
+const PORT = 3000;
+app.listen(PORT, () => {
+    console.log(`Verification Gateway running on port ${PORT}`);
 });

@@ -25,51 +25,35 @@ items:
   - apiVersion: networking.k8s.io/v1
     kind: NetworkPolicy
     metadata:
-      name: default-deny-all
+      name: allow-dns
       namespace: ssi-network
     spec:
       podSelector: {}
       policyTypes:
-      - Ingress
+        - Egress
+      egress:
+        - to:
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: kube-system
+          ports:
+            - protocol: UDP
+              port: 53
+            - protocol: TCP
+              port: 53
 
   - apiVersion: networking.k8s.io/v1
     kind: NetworkPolicy
     metadata:
-      name: allow-governance-to-issuer
+      name: allow-internal-traffic
       namespace: ssi-network
     spec:
-      podSelector:
-        matchLabels:
-          app: issuer-agent
+      podSelector: {}
       policyTypes:
-      - Ingress
+        - Ingress
       ingress:
-      - from:
-        - podSelector:
-            matchLabels:
-              app: governance-service
-        ports:
-        - protocol: TCP
-          port: 8001
-
-  # Allow Ingress Controller (Load Balancer) to access Services
-  - apiVersion: networking.k8s.io/v1
-    kind: NetworkPolicy
-    metadata:
-      name: allow-ingress-access
-      namespace: ssi-network
-    spec:
-      podSelector:
-        matchExpressions:
-          - key: app
-            operator: In
-            values: ["verification-gateway", "governance-service"]
-      ingress:
-      - from:
-        - namespaceSelector: {} # Allow traffic from Ingress Controller namespace
-        ports:
-        - port: 4000
-        - port: 3000
+        - from:
+            - podSelector: {}
 
   # --- REDIS STORE ---
   - apiVersion: apps/v1
@@ -88,16 +72,17 @@ items:
             app: redis-store
         spec:
           containers:
-          - name: redis
-            image: redis:7.2-alpine
-            ports: [{containerPort: 6379}]
-            resources:
-              requests:
-                memory: "128Mi"
-                cpu: "100m"
-              limits:
-                memory: "256Mi"
-                cpu: "500m"
+            - name: redis
+              image: redis:7.2-alpine
+              imagePullPolicy: IfNotPresent # Gunakan image lokal jika ada (untuk mempercepat)
+              resources:
+                requests:
+                  cpu: "200m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "1"
+                  memory: "1Gi"
+              ports: [{ containerPort: 6379 }]
 
   - apiVersion: v1
     kind: Service
@@ -107,15 +92,16 @@ items:
     spec:
       selector:
         app: redis-store
-      ports: [{port: 6379}]
+      ports: [{ port: 6379 }]
 
   # --- POSTGRES ---
   - apiVersion: apps/v1
-    kind: Deployment
+    kind: StatefulSet
     metadata:
       name: wallet-db
       namespace: ssi-network
     spec:
+      serviceName: wallet-db
       replicas: 1
       selector:
         matchLabels:
@@ -126,33 +112,40 @@ items:
             app: wallet-db
         spec:
           containers:
-          - name: postgres
-            image: postgres:15.4-alpine
-            env:
-            - name: POSTGRES_USER
-              value: "indy"
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: ssi-secrets
-                  key: POSTGRES_PASSWORD
-            - name: POSTGRES_DB
-              value: "wallets"
-            ports: [{containerPort: 5432}]
+            - name: postgres
+              image: postgres:15.4-alpine
+              resources:
+                requests:
+                  cpu: "200m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "1"
+                  memory: "1Gi"
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: POSTGRES_USER
+                  value: "indy"
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: POSTGRES_PASSWORD
+                - name: POSTGRES_DB
+                  value: "wallets"
+              ports:
+                - containerPort: 5432
+              volumeMounts:
+                - name: db-data
+                  mountPath: /var/lib/postgresql/data
+      volumeClaimTemplates:
+        - metadata:
+            name: db-data
+          spec:
+            storageClassName: hostpath
+            accessModes: ["ReadWriteOnce"]
             resources:
               requests:
-                memory: "512Mi"
-                cpu: "250m"
-              limits:
-                memory: "1Gi"
-                cpu: "1000m"
-            volumeMounts:
-            - mountPath: /var/lib/postgresql/data
-              name: db-data
-          volumes:
-          - name: db-data
-            persistentVolumeClaim:
-              claimName: wallet-db-pvc
+                storage: 1Gi
 
   - apiVersion: v1
     kind: Service
@@ -160,9 +153,11 @@ items:
       name: wallet-db
       namespace: ssi-network
     spec:
+      clusterIP: None
       selector:
         app: wallet-db
-      ports: [{port: 5432}]
+      ports:
+        - port: 5432
 
   # --- TRANSPARENCY LOG ---
   - apiVersion: apps/v1
@@ -181,10 +176,23 @@ items:
             app: trillian-log-server
         spec:
           containers:
-          - name: rekor-server
-            image: gcr.io/projectsigstore/rekor-server:v1.3.0
-            ports: [{containerPort: 3000}]
-            command: ["rekor-server", "serve", "--trillian_log_server.address=127.0.0.1:8090", "--enable_attestation_storage"]
+            - name: log-server
+              image: dn06/ssi:transparency-log-v1
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  cpu: "200m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "1"
+                  memory: "1Gi"
+              env:
+                - name: REDIS_URL
+                  value: "redis://redis-store:6379"
+              ports:
+                - containerPort: 3000
+          imagePullSecrets:
+            - name: dockerhub-secret
 
   - apiVersion: v1
     kind: Service
@@ -194,7 +202,7 @@ items:
     spec:
       selector:
         app: trillian-log-server
-      ports: [{port: 3000}]
+      ports: [{ port: 3000 }]
 
   # --- ISSUER AGENT ---
   - apiVersion: apps/v1
@@ -203,7 +211,7 @@ items:
       name: issuer-agent
       namespace: ssi-network
     spec:
-      replicas: 2
+      replicas: 1
       selector:
         matchLabels:
           app: issuer-agent
@@ -213,44 +221,67 @@ items:
             app: issuer-agent
         spec:
           containers:
-          - name: aca-py
-            image: bcgovimages/aries-cloudagent:py36-1.16
-            ports: [{containerPort: 8000}, {containerPort: 8001}]
-            resources:
-              requests:
-                memory: "256Mi"
-                cpu: "200m"
-              limits:
-                memory: "512Mi"
-                cpu: "1000m"
-            command: ["/bin/bash", "-c"]
-            args:
-              - >-
-                aca-py start 
-                --label "Government Issuer" 
-                --inbound-transport http 0.0.0.0 8000 
-                --outbound-transport http 
-                --admin 0.0.0.0 8001 
-                --admin-insecure-mode 
-                --wallet-type indy 
-                --wallet-name issuer_wallet 
-                --wallet-key $WALLET_KEY 
-                --wallet-storage-type postgres_storage_config 
-                --wallet-storage-config '{"url":"wallet-db:5432","max_connections":5}' 
-                --wallet-storage-creds $WALLET_CREDS 
-                --genesis-url http://greenlight.bcovrin.vonx.io/genesis 
-                --auto-provision
-            env:
-            - name: WALLET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: ssi-secrets
-                  key: WALLET_KEY
-            - name: WALLET_CREDS
-              valueFrom:
-                secretKeyRef:
-                  name: ssi-secrets
-                  key: WALLET_CREDS
+            - name: aca-py
+              image: bcgovimages/aries-cloudagent:py3.12_1.0.0
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  cpu: "200m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "1"
+                  memory: "1Gi"
+              volumeMounts:
+                - name: genesis-file
+                  mountPath: /etc/indy/genesis.txn
+                  subPath: genesis.txn
+              ports:
+                - containerPort: 8000
+                - containerPort: 8001
+              command: ["/bin/bash", "-c"]
+              args:
+                - >-
+                  aca-py start
+                  --label "Government Issuer"
+                  --inbound-transport http 0.0.0.0 8000
+                  --outbound-transport http
+                  --admin 0.0.0.0 8001
+                  --admin-insecure-mode
+                  --wallet-type indy
+                  --wallet-name issuer_wallet
+                  --wallet-key $WALLET_KEY
+                  --wallet-storage-type postgres_storage_config
+                  --wallet-storage-config '{"url":"wallet-db:5432","max_connections":5}'
+                  --wallet-storage-creds $WALLET_CREDS
+                  --genesis-file /etc/indy/genesis.txn
+                  --auto-provision
+              env:
+                - name: WALLET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: WALLET_KEY
+                - name: WALLET_CREDS
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: WALLET_CREDS
+              readinessProbe:
+                httpGet:
+                  path: /status
+                  port: 8001
+                initialDelaySeconds: 20
+                periodSeconds: 10
+              livenessProbe:
+                httpGet:
+                  path: /status
+                  port: 8001
+                initialDelaySeconds: 60
+                periodSeconds: 20
+          volumes:
+            - name: genesis-file
+              configMap:
+                name: genesis-config
 
   - apiVersion: v1
     kind: Service
@@ -260,26 +291,11 @@ items:
     spec:
       selector:
         app: issuer-agent
-      # FIX: Added 'name' to each port to satisfy Kubernetes requirement for multi-port services
-      ports: 
-      - port: 8000
-        name: http
-      - port: 8001
-        name: admin
-
-  - apiVersion: autoscaling/v1
-    kind: HorizontalPodAutoscaler
-    metadata:
-      name: issuer-hpa
-      namespace: ssi-network
-    spec:
-      scaleTargetRef:
-        apiVersion: apps/v1
-        kind: Deployment
-        name: issuer-agent
-      minReplicas: 2
-      maxReplicas: 10
-      targetCPUUtilizationPercentage: 70
+      ports:
+        - port: 8000
+          name: http
+        - port: 8001
+          name: admin
 
   # --- GOVERNANCE SERVICE ---
   - apiVersion: apps/v1
@@ -288,7 +304,7 @@ items:
       name: governance-service
       namespace: ssi-network
     spec:
-      replicas: 3
+      replicas: 1
       selector:
         matchLabels:
           app: governance-service
@@ -298,26 +314,35 @@ items:
             app: governance-service
         spec:
           containers:
-          - name: governance-logic
-            image: governance-service:latest
-            resources:
-              requests:
-                memory: "128Mi"
-                cpu: "100m"
-              limits:
-                memory: "256Mi"
-                cpu: "500m"
-            env:
-            - name: ISSUER_ADMIN_URL
-              value: "http://issuer-agent:8001"
-            - name: REDIS_URL
-              value: "redis://redis-store:6379"
-            - name: JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: ssi-secrets
-                  key: JWT_SECRET
-            ports: [{containerPort: 3000}]
+            - name: governance-logic
+              image: dn06/ssi:governance-service-v1
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  cpu: "200m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "1"
+                  memory: "1Gi"
+              env:
+                - name: ISSUER_ADMIN_URL
+                  value: "http://issuer-agent:8001"
+                - name: REDIS_URL
+                  value: "redis://redis-store:6379"
+                - name: JWT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: JWT_SECRET
+              ports: [{ containerPort: 3000 }]
+              livenessProbe:
+                httpGet:
+                  path: /health
+                  port: 3000
+                initialDelaySeconds: 10
+                periodSeconds: 10
+          imagePullSecrets:
+            - name: dockerhub-secret
 
   - apiVersion: v1
     kind: Service
@@ -327,7 +352,7 @@ items:
     spec:
       selector:
         app: governance-service
-      ports: [{port: 3000}]
+      ports: [{ port: 3000 }]
 
   # --- VERIFICATION GATEWAY ---
   - apiVersion: apps/v1
@@ -336,7 +361,7 @@ items:
       name: verification-gateway
       namespace: ssi-network
     spec:
-      replicas: 3
+      replicas: 1
       selector:
         matchLabels:
           app: verification-gateway
@@ -346,86 +371,80 @@ items:
             app: verification-gateway
         spec:
           containers:
-          - name: gateway-middleware
-            image: gateway-middleware:latest
-            resources:
-              requests:
-                memory: "128Mi"
-                cpu: "100m"
-              limits:
-                memory: "256Mi"
-                cpu: "500m"
-            env:
-            - name: AGENT_ADMIN_URL
-              value: "http://localhost:8021"
-            - name: TRILLIAN_LOG_URL
-              value: "http://trillian-log-server:3000"
-            - name: REDIS_URL
-              value: "redis://redis-store:6379"
-            - name: JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: ssi-secrets
-                  key: JWT_SECRET
-            - name: API_KEYS
-              valueFrom:
-                secretKeyRef:
-                  name: ssi-secrets
-                  key: API_KEYS
-            ports: [{containerPort: 4000}]
-          
-          - name: verifier-agent
-            image: bcgovimages/aries-cloudagent:py36-1.16
-            resources:
-              requests:
-                memory: "256Mi"
-                cpu: "200m"
-              limits:
-                memory: "512Mi"
-                cpu: "1000m"
-            ports: [{containerPort: 8020}, {containerPort: 8021}]
-            command: ["/bin/bash", "-c"]
-            args:
-              - >-
-                aca-py start 
-                --label "Verification Gateway" 
-                --inbound-transport http 0.0.0.0 8020 
-                --outbound-transport http 
-                --admin 0.0.0.0 8021 
-                --admin-insecure-mode 
-                --wallet-type indy 
-                --wallet-name verifier_wallet 
-                --wallet-key $WALLET_KEY 
-                --wallet-storage-type postgres_storage_config 
-                --wallet-storage-config '{"url":"wallet-db:5432","max_connections":5}' 
-                --wallet-storage-creds $WALLET_CREDS 
-                --genesis-url http://greenlight.bcovrin.vonx.io/genesis 
-                --auto-provision
-            env:
-            - name: WALLET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: ssi-secrets
-                  key: WALLET_KEY
-            - name: WALLET_CREDS
-              valueFrom:
-                secretKeyRef:
-                  name: ssi-secrets
-                  key: WALLET_CREDS
+            - name: gateway-middleware
+              image: dn06/ssi:gateway-middleware-v1
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  cpu: "200m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "1"
+                  memory: "1Gi"
+              env:
+                - name: AGENT_ADMIN_URL
+                  value: "http://127.0.0.1:8021"
+                - name: TRILLIAN_LOG_URL
+                  value: "http://trillian-log-server:3000"
+                - name: REDIS_URL
+                  value: "redis://redis-store:6379"
+                - name: JWT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: JWT_SECRET
+                - name: API_KEYS
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: API_KEYS
+              ports:
+                - containerPort: 4000
 
-  - apiVersion: autoscaling/v1
-    kind: HorizontalPodAutoscaler
-    metadata:
-      name: gateway-hpa
-      namespace: ssi-network
-    spec:
-      scaleTargetRef:
-        apiVersion: apps/v1
-        kind: Deployment
-        name: verification-gateway
-      minReplicas: 3
-      maxReplicas: 15
-      targetCPUUtilizationPercentage: 60
+            - name: verifier-agent
+              image: bcgovimages/aries-cloudagent:py3.12_1.0.0
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  cpu: "200m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "1"
+                  memory: "1Gi"
+              ports:
+                - containerPort: 8020
+                - containerPort: 8021
+              command: ["/bin/bash", "-c"]
+              args:
+                - >-
+                  aca-py start 
+                  --label "Verification Gateway" 
+                  --inbound-transport http 0.0.0.0 8020 
+                  --outbound-transport http 
+                  --admin 0.0.0.0 8021 
+                  --admin-insecure-mode 
+                  --wallet-type indy 
+                  --wallet-name verifier_wallet 
+                  --wallet-key $WALLET_KEY 
+                  --wallet-storage-type postgres_storage_config 
+                  --wallet-storage-config '{"url":"wallet-db:5432","max_connections":5}' 
+                  --wallet-storage-creds $WALLET_CREDS 
+                  --genesis-url http://greenlight.bcovrin.vonx.io/genesis 
+                  --auto-provision
+              env:
+                - name: WALLET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: WALLET_KEY
+                - name: WALLET_CREDS
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: WALLET_CREDS
+
+          imagePullSecrets:
+            - name: dockerhub-secret
 
   - apiVersion: v1
     kind: Service
@@ -435,40 +454,4 @@ items:
     spec:
       selector:
         app: verification-gateway
-      ports: [{port: 4000}]
-
-  # --- INGRESS (LOAD BALANCER) ---
-  - apiVersion: networking.k8s.io/v1
-    kind: Ingress
-    metadata:
-      name: ssi-ingress
-      namespace: ssi-network
-      annotations:
-        # Limit ukuran body untuk mencegah DoS (selain rate limit aplikasi)
-        nginx.ingress.kubernetes.io/proxy-body-size: "10m"
-        # Rewrite path: /api/vg/verify -> /verify
-        nginx.ingress.kubernetes.io/rewrite-target: /$2
-    spec:
-      ingressClassName: nginx
-      rules:
-      - http:
-          paths:
-          # Route 1: Verification Gateway
-          # Access: http://<LOAD_BALANCER_IP>/api/vg/verify
-          - path: /api/vg(/|$)(.*)
-            pathType: Prefix
-            backend:
-              service:
-                name: verification-gateway
-                port:
-                  number: 4000
-          
-          # Route 2: Governance Service
-          # Access: http://<LOAD_BALANCER_IP>/api/gov/proposals
-          - path: /api/gov(/|$)(.*)
-            pathType: Prefix
-            backend:
-              service:
-                name: governance-service
-                port:
-                  number: 3000
+      ports: [{ port: 4000 }]
