@@ -1,0 +1,44 @@
+  # --- TRANSPARENCY LOG ---
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: trillian-log-server
+      namespace: ssi-network
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: trillian-log-server
+      template:
+        metadata:
+          labels:
+            app: trillian-log-server
+        spec:
+          containers:
+            - name: log-server
+              image: dn06/ssi:transparency-log-v1
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  cpu: "200m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "1"
+                  memory: "1Gi"
+              env:
+                - name: REDIS_URL
+                  value: "redis://redis-store:6379"
+              ports:
+                - containerPort: 3000
+          imagePullSecrets:
+            - name: dockerhub-secret
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: trillian-log-server
+      namespace: ssi-network
+    spec:
+      selector:
+        app: trillian-log-server
+      ports: [{ port: 3000 }]

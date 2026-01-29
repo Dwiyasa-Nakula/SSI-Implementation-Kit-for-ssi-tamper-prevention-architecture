@@ -1,5 +1,5 @@
 /**
- * Governance Service (Final Hardened Version)
+ * Governance Service
  * * PRODUCTION GRADE IMPLEMENTATION
  * * Features: Redis, Ed25519 Crypto, JWT Admin.
  * * NEW: Helmet & Graceful Shutdown.
