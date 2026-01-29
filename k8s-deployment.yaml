@@ -79,11 +79,11 @@ items:
               imagePullPolicy: IfNotPresent
               resources:
                 requests:
-                  cpu: "500m"
-                  memory: "2Gi"   # Request besar untuk cache performa tinggi
+                  cpu: "1"
+                  memory: "2Gi"   # Requesting 2GB
                 limits:
                   cpu: "4"
-                  memory: "16Gi"  # Limit longgar untuk server 128GB
+                  memory: "16Gi"  # Capped at 16GB
               ports: [{ containerPort: 6379 }]
 
   - apiVersion: v1
@@ -119,11 +119,11 @@ items:
               imagePullPolicy: IfNotPresent
               resources:
                 requests:
-                  cpu: "1"
-                  memory: "1Gi"
+                  cpu: "2"
+                  memory: "2Gi"
                 limits:
-                  cpu: "4"       # Database boleh menggunakan banyak core 8/16 di server
-                  memory: "4Gi"  # Memori besar untuk buffer pool or 32Gi
+                  cpu: "4"        # Allow bursting to 4 cores
+                  memory: "4Gi"  # Allow DB to grow to 4GB RAM
               env:
                 - name: POSTGRES_USER
                   value: "indy"
@@ -144,9 +144,10 @@ items:
             name: db-data
           spec:
             accessModes: ["ReadWriteOnce"]
+            # Uses default StorageClass
             resources:
               requests:
-                storage: 1Gi # 50Gi Storage produksi yang lebih besar
+                storage: 4Gi # 50Gi Storage produksi yang lebih besar
 
   - apiVersion: v1
     kind: Service
@@ -162,7 +163,7 @@ items:
 
   # --- TRILLIAN FULL STACK (AUDIT LOG) ---
   
-  # ConfigMap Schema (SQL untuk Trillian)
+  # ConfigMap Schema (SQL)
   - apiVersion: v1
     kind: ConfigMap
     metadata:
@@ -324,11 +325,11 @@ items:
               - containerPort: 8091
             resources:
               requests:
-                memory: "1Gi"
                 cpu: "500m"
+                memory: "1Gi"
               limits:
-                memory: "4Gi"
                 cpu: "2"
+                memory: "4Gi"
           initContainers:
           - name: wait-for-mysql
             image: busybox
@@ -381,11 +382,11 @@ items:
               - containerPort: 8091
             resources:
               requests:
-                memory: "1Gi"
                 cpu: "500m"
+                memory: "1Gi"
               limits:
-                memory: "4Gi"
                 cpu: "2"
+                memory: "4Gi"
           initContainers:
           - name: wait-for-mysql
             image: busybox
@@ -405,7 +406,7 @@ items:
         - name: rpc
           port: 8091
 
-  # 6.5 Rekor Server (Public API yang diakses Gateway)
+  # Rekor/Record Server (Public API - This is what Gateway talks to)
   - apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -434,11 +435,11 @@ items:
               - containerPort: 3000
             resources:
               requests:
-                memory: "1Gi"
-                cpu: "500m"
+                cpu: "1"
+                memory: "2Gi"
               limits:
-                memory: "4Gi"
-                cpu: "2"
+                cpu: "4"
+                memory: "8Gi"
           initContainers:
           - name: wait-for-trillian
             image: busybox
@@ -483,14 +484,11 @@ items:
                 limits:
                   cpu: "4"
                   memory: "8Gi"
-              volumeMounts:
-                - name: genesis-file
-                  mountPath: /etc/indy/genesis.txn
-                  subPath: genesis.txn
               ports:
                 - containerPort: 8000
                 - containerPort: 8001
               command: ["/bin/bash", "-c"]
+              # for production  use --genesis-url https://raw.githubusercontent.com/sovrin-foundation/sovrin/master/sovrin/pool_transactions_builder_genesis
               args:
                 - >-
                   aca-py start
@@ -505,7 +503,7 @@ items:
                   --wallet-storage-type postgres_storage_config
                   --wallet-storage-config '{"url":"wallet-db:5432","max_connections":50}'
                   --wallet-storage-creds $WALLET_CREDS
-                  --genesis-file /etc/indy/genesis.txn
+                  --genesis-url https://raw.githubusercontent.com/sovrin-foundation/sovrin/stable/sovrin/pool_transactions_sandbox_genesis
                   --auto-provision
               env:
                 - name: WALLET_KEY
@@ -530,10 +528,6 @@ items:
                   port: 8001
                 initialDelaySeconds: 60
                 periodSeconds: 20
-          volumes:
-            - name: genesis-file
-              configMap:
-                name: genesis-config
 
   - apiVersion: v1
     kind: Service
@@ -632,12 +626,12 @@ items:
                   memory: "1Gi"
                 limits:
                   cpu: "4"
-                  memory: "4Gi"
+                  memory: "8Gi"
               env:
                 - name: AGENT_ADMIN_URL
                   value: "http://127.0.0.1:8021"
                 - name: TRILLIAN_LOG_URL
-                  value: "http://rekor-server:3000" # Pointing to Real Rekor
+                  value: "http://rekor-server:3000"
                 - name: REDIS_URL
                   value: "redis://redis-store:6379"
                 - name: JWT_SECRET
@@ -667,6 +661,8 @@ items:
                 - containerPort: 8020
                 - containerPort: 8021
               command: ["/bin/bash", "-c"]
+              # FIX: Using direct genesis URL consistent with Issuer
+              # for production use --genesis-url https://raw.githubusercontent.com/sovrin-foundation/sovrin/master/sovrin/pool_transactions_builder_genesis
               args:
                 - >-
                   aca-py start 
@@ -681,7 +677,7 @@ items:
                   --wallet-storage-type postgres_storage_config 
                   --wallet-storage-config '{"url":"wallet-db:5432","max_connections":50}' 
                   --wallet-storage-creds $WALLET_CREDS 
-                  --genesis-url http://greenlight.bcovrin.vonx.io/genesis 
+                  --genesis-url https://raw.githubusercontent.com/sovrin-foundation/sovrin/stable/sovrin/pool_transactions_sandbox_genesis
                   --auto-provision
               env:
                 - name: WALLET_KEY
@@ -715,7 +711,7 @@ items:
       name: ssi-ingress
       namespace: ssi-network
       annotations:
-        nginx.ingress.kubernetes.io/proxy-body-size: "50m" # Limit lebih besar untuk produksi
+        nginx.ingress.kubernetes.io/proxy-body-size: "50m"
         nginx.ingress.kubernetes.io/rewrite-target: /$2
     spec:
       ingressClassName: nginx
