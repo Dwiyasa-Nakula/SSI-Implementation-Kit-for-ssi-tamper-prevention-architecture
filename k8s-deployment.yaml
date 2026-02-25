@@ -1,0 +1,854 @@
+apiVersion: v1
+kind: List
+items:
+  # --- NAMESPACE ---
+  - apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: ssi-network
+
+  # --- SECRETS ---
+  # IMPORTANT: PLEASE CHANGE THE KEYS/GENERATE NEW ONES BEFORE APPLYING
+  # See k8s-secrets.template.yaml 
+
+  # Allow DNS and specific egress
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: base-egress-policy
+      namespace: ssi-network
+    spec:
+      podSelector: {}
+      policyTypes: [Egress]
+      egress:
+        - to: # DNS
+            - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          ports:
+            - protocol: UDP
+              port: 53
+            - protocol: TCP
+              port: 53
+        - to: # External Ledger/Web
+            - ipBlock: { cidr: 0.0.0.0/0 }
+          ports:
+            - protocol: TCP
+              port: 443
+            - protocol: TCP
+              port: 9000
+
+  # RESTRICTIVE POLICIES
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: allow-gov-to-issuer
+      namespace: ssi-network
+    spec:
+      podSelector: { matchLabels: { app: issuer-agent } }
+      ingress:
+        - from: [{ podSelector: { matchLabels: { app: governance-service } } }]
+          ports: [{ port: 8001 }]
+
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: allow-gateway-to-rekor
+      namespace: ssi-network
+    spec:
+      podSelector: { matchLabels: { app: rekor-server } }
+      ingress:
+        - from: [{ podSelector: { matchLabels: { app: verification-gateway } } }]
+          ports: [{ port: 3000 }]
+
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: allow-redis-access
+      namespace: ssi-network
+    spec:
+      podSelector: { matchLabels: { app: redis-store } }
+      ingress:
+        - from: 
+            - podSelector: { matchLabels: { app: governance-service } }
+            - podSelector: { matchLabels: { app: verification-gateway } }
+          ports: [{ port: 6379 }]
+
+  # --- SHARED INFRASTRUCTURE (REDIS) ---
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: redis-store
+      namespace: ssi-network
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: redis-store
+      template:
+        metadata:
+          labels:
+            app: redis-store
+        spec:
+          containers:
+            - name: redis
+              image: redis:7.0.11-alpine
+              command: ["redis-server", "--requirepass", "$(REDIS_PASSWORD)"]
+              env:
+                - name: REDIS_PASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: ssi-secrets, key: REDIS_PASSWORD }
+              imagePullPolicy: IfNotPresent
+              ports: [{ containerPort: 6379 }]
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: redis-store
+      namespace: ssi-network
+    spec:
+      selector:
+        app: redis-store
+      ports: [{ port: 6379 }]
+
+  # --- WALLET DATABASE (POSTGRES STATEFULSET) ---
+  - apiVersion: apps/v1
+    kind: StatefulSet
+    metadata:
+      name: wallet-db
+      namespace: ssi-network
+    spec:
+      serviceName: wallet-db
+      replicas: 1
+      selector:
+        matchLabels:
+          app: wallet-db
+      template:
+        metadata:
+          labels:
+            app: wallet-db
+        spec:
+          containers:
+            - name: postgres
+              image: postgres:15.4-alpine
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  cpu: "2"
+                  memory: "512Mi" # change to 2Gi
+                limits:
+                  cpu: "4" # Allow bursting to 4 cores
+                  memory: "4Gi" # Allow DB to grow to 4GB RAM
+              env:
+                - name: POSTGRES_USER
+                  value: "indy"
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: POSTGRES_PASSWORD
+                - name: POSTGRES_DB
+                  value: "wallets"
+              ports:
+                - containerPort: 5432
+              volumeMounts:
+                - name: db-data
+                  mountPath: /var/lib/postgresql/data
+      volumeClaimTemplates:
+        - metadata:
+            name: db-data
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            # Uses default StorageClass
+            resources:
+              requests:
+                storage: 4Gi # 50Gi Storage produksi yang lebih besar
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: wallet-db
+      namespace: ssi-network
+    spec:
+      clusterIP: None
+      selector:
+        app: wallet-db
+      ports:
+        - port: 5432
+
+  # Validator Public Keys ConfigMap
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: validator-keys
+      namespace: ssi-network
+    data:
+      validator_1.pub: |
+        -----BEGIN PUBLIC KEY-----
+        MCowBQYDK2VwAyEA/WdbM+2xT5v3tE1qk6x7W2x3+7j7X9x8x3+7j7X9x8w=
+        -----END PUBLIC KEY-----
+      validator_2.pub: |
+        -----BEGIN PUBLIC KEY-----
+        MCowBQYDK2VwAyEA+9x8x3+7j7X9x8x3+7j7X9x8x3+7j7X9x8x3+7j7X9w=
+        -----END PUBLIC KEY-----
+      validator_3.pub: |
+        -----BEGIN PUBLIC KEY-----
+        MCowBQYDK2VwAyEA/WdbM+2xT5v3tE1qk6x7W2x3+7j7X9x8x3+7j7X9x8A=
+        -----END PUBLIC KEY-----
+      validator_4.pub: |
+        -----BEGIN PUBLIC KEY-----
+        MCowBQYDK2VwAyEA/WdbM+2xT5v3tE1qk6x7W2x3+7j7X9x8x3+7j7X9x8B=
+        -----END PUBLIC KEY-----
+      validator_5.pub: |
+        -----BEGIN PUBLIC KEY-----
+        MCowBQYDK2VwAyEA/WdbM+2xT5v3tE1qk6x7W2x3+7j7X9x8x3+7j7X9x8C=
+        -----END PUBLIC KEY-----
+  # ConfigMap Schema (SQL)
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: trillian-schema
+      namespace: ssi-network
+    data:
+      storage.sql: |
+        CREATE TABLE IF NOT EXISTS Trees (
+          TreeId                BIGINT NOT NULL,
+          TreeState             ENUM('ACTIVE', 'FROZEN', 'DRAINING') NOT NULL,
+          TreeType              ENUM('LOG', 'MAP', 'PREORDERED_LOG') NOT NULL,
+          HashStrategy          ENUM('RFC6962_SHA256') NOT NULL,
+          HashAlgorithm         ENUM('SHA256') NOT NULL,
+          SignatureAlgorithm    ENUM('ECDSA', 'RSA', 'ED25519') NOT NULL,
+          DisplayName           VARCHAR(20),
+          Description           VARCHAR(200),
+          CreateTimeMillis      BIGINT NOT NULL,
+          UpdateTimeMillis      BIGINT NOT NULL,
+          MaxRootDurationMillis BIGINT NOT NULL,
+          PrivateKey            MEDIUMBLOB NOT NULL,
+          PublicKey             MEDIUMBLOB NOT NULL,
+          Deleted               BOOLEAN,
+          DeleteTimeMillis      BIGINT,
+          PRIMARY KEY(TreeId)
+        );
+        CREATE TABLE IF NOT EXISTS TreeControl (
+          TreeId                  BIGINT NOT NULL,
+          SigningEnabled          BOOLEAN NOT NULL,
+          SequencingEnabled       BOOLEAN NOT NULL,
+          SequenceIntervalSeconds INTEGER NOT NULL,
+          PRIMARY KEY(TreeId),
+          FOREIGN KEY(TreeId) REFERENCES Trees(TreeId) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS Subtree (
+          TreeId               BIGINT NOT NULL,
+          SubtreeId            VARBINARY(255) NOT NULL,
+          Nodes                MEDIUMBLOB NOT NULL,
+          SubtreeRevision      INTEGER NOT NULL,
+          PRIMARY KEY(TreeId, SubtreeId, SubtreeRevision),
+          FOREIGN KEY(TreeId) REFERENCES Trees(TreeId) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS TreeHead (
+          TreeId               BIGINT NOT NULL,
+          TreeHeadTimestamp    BIGINT,
+          TreeSize             BIGINT,
+          RootHash             VARBINARY(255) NOT NULL,
+          RootSignature        VARBINARY(1024) NOT NULL,
+          TreeHeadRevision     BIGINT,
+          PRIMARY KEY(TreeId, TreeHeadRevision),
+          FOREIGN KEY(TreeId) REFERENCES Trees(TreeId) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS LeafData (
+          TreeId               BIGINT NOT NULL,
+          LeafIdentityHash     VARBINARY(255) NOT NULL,
+          LeafValue            MEDIUMBLOB NOT NULL,
+          ExtraData            MEDIUMBLOB,
+          PRIMARY KEY(TreeId, LeafIdentityHash),
+          FOREIGN KEY(TreeId) REFERENCES Trees(TreeId) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS SequencedLeafData (
+          TreeId               BIGINT NOT NULL,
+          SequenceNumber       BIGINT NOT NULL,
+          LeafIdentityHash     VARBINARY(255) NOT NULL,
+          Merklized            BOOLEAN,
+          IntegrateTimestamp   BIGINT NOT NULL,
+          PRIMARY KEY(TreeId, SequenceNumber),
+          FOREIGN KEY(TreeId) REFERENCES Trees(TreeId) ON DELETE CASCADE,
+          FOREIGN KEY(TreeId, LeafIdentityHash) REFERENCES LeafData(TreeId, LeafIdentityHash) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS Unsequenced (
+          TreeId               BIGINT NOT NULL,
+          Bucket               INTEGER NOT NULL,
+          LeafIdentityHash     VARBINARY(255) NOT NULL,
+          Merklized            BOOLEAN,
+          QueueTimestampNanos  BIGINT NOT NULL,
+          PRIMARY KEY(TreeId, Bucket, QueueTimestampNanos, LeafIdentityHash),
+          FOREIGN KEY(TreeId) REFERENCES Trees(TreeId) ON DELETE CASCADE,
+          FOREIGN KEY(TreeId, LeafIdentityHash) REFERENCES LeafData(TreeId, LeafIdentityHash) ON DELETE CASCADE
+        );
+
+  # Trillian Database (MySQL)
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: trillian-mysql
+      namespace: ssi-network
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: trillian-mysql
+      template:
+        metadata:
+          labels:
+            app: trillian-mysql
+        spec:
+          containers:
+            - name: mysql
+              image: mysql:8.0
+              args:
+                - "--default-authentication-plugin=mysql_native_password"
+              env:
+                - name: MYSQL_ROOT_PASSWORD
+                  value: "rootpass"
+                - name: MYSQL_DATABASE
+                  value: "test"
+              ports: [{ containerPort: 3306 }]
+              volumeMounts:
+                - name: schema-volume
+                  mountPath: /docker-entrypoint-initdb.d
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: "512Mi" # change to 2Gi
+                limits:
+                  cpu: "4"
+                  memory: "8Gi"
+          volumes:
+            - name: schema-volume
+              configMap:
+                name: trillian-schema
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: trillian-mysql
+      namespace: ssi-network
+    spec:
+      selector:
+        app: trillian-mysql
+      ports: [{ port: 3306 }]
+
+  # Trillian Log Server (RPC)
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: trillian-log-server
+      namespace: ssi-network
+    spec:
+      replicas: 2
+      selector:
+        matchLabels:
+          app: trillian-log-server
+      template:
+        metadata:
+          labels:
+            app: trillian-log-server
+        spec:
+          containers:
+            - name: log-server
+              image: ghcr.io/sigstore/rekor/trillian_log_server:v1.3.4
+              command:
+                - "/ko-app/trillian_log_server"
+                - "--http_endpoint=0.0.0.0:8090"
+                - "--rpc_endpoint=0.0.0.0:8091"
+                - "--storage_system=mysql"
+                - "--mysql_uri=root:rootpass@tcp(trillian-mysql:3306)/test"
+                - "--alsologtostderr"
+              ports:
+                - containerPort: 8090
+                - containerPort: 8091
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "512Mi" # change to 1Gi
+                limits:
+                  cpu: "2"
+                  memory: "4Gi"
+          initContainers:
+            - name: wait-for-mysql
+              image: busybox
+              command:
+                [
+                  "sh",
+                  "-c",
+                  "until nc -z trillian-mysql 3306; do echo waiting for mysql; sleep 2; done;",
+                ]
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: trillian-log-server
+      namespace: ssi-network
+    spec:
+      selector:
+        app: trillian-log-server
+      ports:
+        - name: http
+          port: 8090
+        - name: rpc
+          port: 8091
+
+  # 6.4 Trillian Log Signer
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: trillian-log-signer
+      namespace: ssi-network
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: trillian-log-signer
+      template:
+        metadata:
+          labels:
+            app: trillian-log-signer
+        spec:
+          containers:
+            - name: log-signer
+              image: ghcr.io/sigstore/rekor/trillian_log_signer:v1.3.4
+              command:
+                - "/ko-app/trillian_log_signer"
+                - "--http_endpoint=0.0.0.0:8090"
+                - "--rpc_endpoint=0.0.0.0:8091"
+                - "--storage_system=mysql"
+                - "--mysql_uri=root:rootpass@tcp(trillian-mysql:3306)/test"
+                - "--sequencer_interval=1s"
+                - "--batch_size=1000" # Batch size ditingkatkan untuk throughput tinggi
+                - "--alsologtostderr"
+                - "--force_master"
+              ports:
+                - containerPort: 8090
+                - containerPort: 8091
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "512Mi" # change to 1Gi
+                limits:
+                  cpu: "2"
+                  memory: "4Gi"
+          initContainers:
+            - name: wait-for-mysql
+              image: busybox
+              command:
+                [
+                  "sh",
+                  "-c",
+                  "until nc -z trillian-mysql 3306; do echo waiting for mysql; sleep 2; done;",
+                ]
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: trillian-log-signer
+      namespace: ssi-network
+    spec:
+      selector:
+        app: trillian-log-signer
+      ports:
+        - name: http
+          port: 8090
+        - name: rpc
+          port: 8091
+
+  # Rekor/Record Server (Public API - This is what Gateway talks to)
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: rekor-server
+      namespace: ssi-network
+    spec:
+      replicas: 2
+      selector:
+        matchLabels:
+          app: rekor-server
+      template:
+        metadata:
+          labels:
+            app: rekor-server
+        spec:
+          containers:
+            - name: rekor-server
+              image: gcr.io/projectsigstore/rekor-server:v1.3.0
+              command: ["rekor-server", "serve"]
+              args:
+                - "--trillian_log_server.address=trillian-log-server:8091"
+                - "--trillian_log_server.tlog_id=3847170233833341573"
+                - "--log_type=dev"
+              ports:
+                - containerPort: 3000
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: "512Mi" #change to 2Gi
+                limits:
+                  cpu: "4"
+                  memory: "8Gi"
+          initContainers:
+            - name: wait-for-trillian
+              image: busybox
+              command:
+                [
+                  "sh",
+                  "-c",
+                  "until nc -z trillian-log-server 8091; do echo waiting for trillian; sleep 2; done;",
+                ]
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: rekor-server
+      namespace: ssi-network
+    spec:
+      selector:
+        app: rekor-server
+      ports:
+        - port: 3000
+          name: http-api
+
+  # --- ISSUER AGENT ---
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: issuer-agent
+      namespace: ssi-network
+    spec:
+      replicas: 1 # change it to 2
+      selector:
+        matchLabels:
+          app: issuer-agent
+      template:
+        metadata:
+          labels:
+            app: issuer-agent
+        spec:
+          containers:
+            - name: aca-py
+              image: bcgovimages/aries-cloudagent:py3.12_1.0.0
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: "512Mi" # change to 2Gi
+                limits:
+                  cpu: "4"
+                  memory: "8Gi"
+              ports:
+                - containerPort: 8000
+                - containerPort: 8001
+              command: ["aca-py", "start"]
+              # for production  use --genesis-url https://raw.githubusercontent.com/sovrin-foundation/sovrin/master/sovrin/pool_transactions_builder_genesis
+              args:
+                - "--label"
+                - "Government Issuer"
+                - "--inbound-transport"
+                - "http"
+                - "0.0.0.0"
+                - "8000"
+                - "--outbound-transport"
+                - "http"
+                - "--admin"
+                - "0.0.0.0"
+                - "8001"
+                - "--admin-insecure-mode"
+                - "--wallet-type"
+                - "askar"
+                - "--wallet-name"
+                - "issuer_wallet"
+                - "--wallet-key"
+                - "$(WALLET_KEY)"
+                - "--wallet-storage-type"
+                - "postgres"
+                - "--wallet-storage-config"
+                - '{"url":"wallet-db:5432","max_connections":50}'
+                - "--wallet-storage-creds"
+                - "$(WALLET_CREDS)"
+                - "--genesis-url"
+                - "http://host.docker.internal:9000/genesis"
+                - "--auto-provision"
+              env:
+                - name: WALLET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: WALLET_KEY
+                - name: WALLET_CREDS
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: WALLET_CREDS
+
+              readinessProbe:
+                httpGet:
+                  path: /status
+                  port: 8001
+                initialDelaySeconds: 20
+                periodSeconds: 10
+              livenessProbe:
+                httpGet:
+                  path: /status
+                  port: 8001
+                initialDelaySeconds: 60
+                periodSeconds: 20
+
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: issuer-agent
+      namespace: ssi-network
+    spec:
+      selector:
+        app: issuer-agent
+      ports:
+        - port: 8000
+          name: http
+        - port: 8001
+          name: admin
+
+  # --- GOVERNANCE SERVICE ---
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: governance-service
+      namespace: ssi-network
+    spec:
+      replicas: 3 # change it to minimum of 3
+      selector:
+        matchLabels:
+          app: governance-service
+      template:
+        metadata:
+          labels:
+            app: governance-service
+        spec:
+          containers:
+            - name: governance-logic
+              image: dn06/ssi:governance-service-v1
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "512Mi" # change to 1Gi
+                limits:
+                  cpu: "2"
+                  memory: "4Gi"
+              env:
+                - name: ISSUER_ADMIN_URL
+                  value: "http://issuer-agent:8001"
+                - name: REDIS_URL
+                  value: "redis://:$(REDIS_PASSWORD)@redis-store:6379"
+                - name: JWT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: JWT_SECRET
+                - name: REDIS_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: REDIS_PASSWORD
+                - name: VALIDATOR_KEYS_PATH
+                  value: "/etc/governance/keys"
+              ports: [{ containerPort: 3000 }]
+              volumeMounts:
+                - name: keys-volume
+                  mountPath: /etc/governance/keys
+                  readOnly: true
+              livenessProbe:
+                httpGet:
+                  path: /health
+                  port: 3000
+                initialDelaySeconds: 10
+                periodSeconds: 10
+          imagePullSecrets:
+            - name: dockerhub-secret
+          volumes:
+            - name: keys-volume
+              configMap:
+                name: validator-keys
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: governance-service
+      namespace: ssi-network
+    spec:
+      selector:
+        app: governance-service
+      ports: [{ port: 3000 }]
+
+  # --- VERIFICATION GATEWAY ---
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: verification-gateway
+      namespace: ssi-network
+    spec:
+      replicas: 3 # change it to minimum of 3
+      selector:
+        matchLabels:
+          app: verification-gateway
+      template:
+        metadata:
+          labels:
+            app: verification-gateway
+        spec:
+          containers:
+            - name: gateway-middleware
+              image: dn06/ssi:gateway-middleware-v1
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: "512Mi" # change to 1Gi
+                limits:
+                  cpu: "4"
+                  memory: "8Gi"
+              env:
+                - name: AGENT_ADMIN_URL
+                  value: "http://127.0.0.1:8021"
+                - name: TRILLIAN_LOG_URL
+                  value: "http://rekor-server:3000"
+                - name: REDIS_URL
+                  value: "redis://:$(REDIS_PASSWORD)@redis-store:6379"
+                - name: JWT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: JWT_SECRET
+                - name: WEBHOOK_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: WEBHOOK_SECRET
+                - name: REDIS_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: REDIS_PASSWORD
+                - name: API_KEYS
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: API_KEYS
+              ports:
+                - containerPort: 4000
+
+            - name: verifier-agent
+              image: bcgovimages/aries-cloudagent:py3.12_1.0.0
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: "512Mi" #change to 2Gi
+                limits:
+                  cpu: "4"
+                  memory: "8Gi"
+              ports:
+                - containerPort: 8020
+                - containerPort: 8021
+              command: ["aca-py", "start"]
+              # FIX: Using direct genesis URL consistent with Issuer
+              # for production use --genesis-url https://raw.githubusercontent.com/sovrin-foundation/sovrin/master/sovrin/pool_transactions_builder_genesis
+              # for sandbox use --genesis-url https://raw.githubusercontent.com/sovrin-foundation/sovrin/stable/sovrin/pool_transactions_sandbox_genesis
+              args:
+                - "--label"
+                - "Verification Gateway"
+                - "--inbound-transport"
+                - "http"
+                - "0.0.0.0"
+                - "8020"
+                - "--outbound-transport"
+                - "http"
+                - "--admin"
+                - "0.0.0.0"
+                - "8021"
+                - "--admin-insecure-mode"
+                - "--wallet-type"
+                - "askar"
+                - "--wallet-name"
+                - "verifier_wallet"
+                - "--wallet-key"
+                - "$(WALLET_KEY)"
+                - "--wallet-storage-type"
+                - "postgres"
+                - "--wallet-storage-config"
+                - '{"url":"wallet-db:5432","max_connections":50}'
+                - "--wallet-storage-creds"
+                - "$(WALLET_CREDS)"
+                - "--genesis-url"
+                - "http://host.docker.internal:9000/genesis"
+                - "--auto-provision"
+              env:
+                - name: WALLET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: WALLET_KEY
+                - name: WALLET_CREDS
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: WALLET_CREDS
+
+              readinessProbe:
+                httpGet:
+                  path: /status
+                  port: 8021
+                initialDelaySeconds: 20
+                periodSeconds: 10
+              livenessProbe:
+                httpGet:
+                  path: /status
+                  port: 8021
+                initialDelaySeconds: 60
+                periodSeconds: 20
+
+          imagePullSecrets:
+            - name: dockerhub-secret
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: verification-gateway
+      namespace: ssi-network
+    spec:
+      selector:
+        app: verification-gateway
+      ports: [{ port: 4000 }]
+
+  # --- 10. INGRESS (NGINX) ---
+  - apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: ssi-ingress
+      namespace: ssi-network
+      annotations:
+        nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+        nginx.ingress.kubernetes.io/rewrite-target: /$2
+    spec:
+      ingressClassName: nginx
+      rules:
+        - http:
+            paths:
+              - path: /api/vg(/|$)(.*)
+                pathType: Prefix
+                backend:
+                  service:
+                    name: verification-gateway
+                    port:
+                      number: 4000
+              - path: /api/gov(/|$)(.*)
+                pathType: Prefix
+                backend:
+                  service:
+                    name: governance-service
+                    port:
+                      number: 3000
