@@ -519,7 +519,7 @@ items:
       name: issuer-agent
       namespace: ssi-network
     spec:
-      replicas: 1 # change it to 2
+      replicas: 2 # change it to 2
       selector:
         matchLabels:
           app: issuer-agent
@@ -630,7 +630,7 @@ items:
         spec:
           containers:
             - name: governance-logic
-              image: dn06/ssi:governance-service-v1
+              image: dn06/ssi:governance-service-v2
               imagePullPolicy: IfNotPresent
               resources:
                 requests:
@@ -642,18 +642,18 @@ items:
               env:
                 - name: ISSUER_ADMIN_URL
                   value: "http://issuer-agent:8001"
-                - name: REDIS_URL
-                  value: "redis://:$(REDIS_PASSWORD)@redis-store:6379"
-                - name: JWT_SECRET
-                  valueFrom:
-                    secretKeyRef:
-                      name: ssi-secrets
-                      key: JWT_SECRET
                 - name: REDIS_PASSWORD
                   valueFrom:
                     secretKeyRef:
                       name: ssi-secrets
                       key: REDIS_PASSWORD
+                - name: REDIS_URL
+                  value: "redis://redis-store:6379"
+                - name: JWT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: JWT_SECRET
                 - name: VALIDATOR_KEYS_PATH
                   value: "/etc/governance/keys"
               ports: [{ containerPort: 3000 }]
@@ -691,7 +691,7 @@ items:
       name: verification-gateway
       namespace: ssi-network
     spec:
-      replicas: 3 # change it to minimum of 3
+      replicas: 2 # change it to minimum of 3
       selector:
         matchLabels:
           app: verification-gateway
@@ -702,7 +702,7 @@ items:
         spec:
           containers:
             - name: gateway-middleware
-              image: dn06/ssi:gateway-middleware-v1
+              image: dn06/ssi:gateway-middleware-v2
               imagePullPolicy: IfNotPresent
               resources:
                 requests:
@@ -716,8 +716,13 @@ items:
                   value: "http://127.0.0.1:8021"
                 - name: TRILLIAN_LOG_URL
                   value: "http://rekor-server:3000"
+                - name: REDIS_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: ssi-secrets
+                      key: REDIS_PASSWORD
                 - name: REDIS_URL
-                  value: "redis://:$(REDIS_PASSWORD)@redis-store:6379"
+                  value: "redis://redis-store:6379"
                 - name: JWT_SECRET
                   valueFrom:
                     secretKeyRef:
@@ -728,11 +733,6 @@ items:
                     secretKeyRef:
                       name: ssi-secrets
                       key: WEBHOOK_SECRET
-                - name: REDIS_PASSWORD
-                  valueFrom:
-                    secretKeyRef:
-                      name: ssi-secrets
-                      key: REDIS_PASSWORD
                 - name: API_KEYS
                   valueFrom:
                     secretKeyRef:
@@ -831,8 +831,14 @@ items:
       name: ssi-ingress
       namespace: ssi-network
       annotations:
-        nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+        nginx.ingress.kubernetes.io/proxy-body-size: "1m"
         nginx.ingress.kubernetes.io/rewrite-target: /$2
+        # Enforce HTTPS
+        # nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+        # Enable CORS if a browser frontend calls this API
+        nginx.ingress.kubernetes.io/enable-cors: "true"
+        # TODO: need to reveiw this
+        nginx.ingress.kubernetes.io/cors-allow-methods: "GET, PUT, POST, DELETE, OPTIONS"
     spec:
       ingressClassName: nginx
       rules:

@@ -2,7 +2,7 @@
  * Verification Gateway
  * * PRODUCTION GRADE IMPLEMENTATION
  * * Features: Redis State, Trillian, Auth, RBAC, Rate Limit.
- * * NEW: Helmet (Headers) & Graceful Shutdown.
+ * * NEW: Helmet, Trust Proxy, & Graceful Shutdown.
  */
 
 const express = require("express");
@@ -13,13 +13,17 @@ const { createClient } = require("redis");
 const rateLimit = require("express-rate-limit");
 const RedisStore = require("rate-limit-redis").default;
 const { body, validationResult } = require("express-validator");
-const helmet = require("helmet"); // NEW: Security Headers
+const helmet = require("helmet");
 
 const app = express();
 
-// 1. SECURITY HEADERS
+// --- 1. KUBERNETES & SECURITY CONFIG ---
+// TRUST PROXY: Essential for K8s Ingress to get the real user IP for the rate limiter.
+// '1' means trust the first proxy hop (Nginx).
+app.set("trust proxy", 1); 
+
 app.use(helmet());
-app.use(express.json({ limit: "10kb" }));
+app.use(express.json({ limit: "1mb" }));
 
 // --- CONFIGURATION ---
 const AGENT_ADMIN_URL = process.env.AGENT_ADMIN_URL || "http://localhost:8021";
@@ -27,15 +31,26 @@ const TRILLIAN_URL = process.env.TRILLIAN_LOG_URL || "http://trillian-log-server
 const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
 const JWT_SECRET = process.env.JWT_SECRET;
 const API_KEYS = process.env.API_KEYS ? process.env.API_KEYS.split(",") : [];
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET; // NEW: Secret for webhook auth
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
 if (!JWT_SECRET) {
   console.error("[CRITICAL] JWT_SECRET is missing. Exiting.");
-  process.exit(1); // Fail fast in k8s
+  process.exit(1); 
 }
 
 // --- REDIS CLIENT ---
-const redisClient = createClient({ url: REDIS_URL });
+// node-redis v4 ignores the `password` field when `url` is set.
+// We must embed the password in the URL itself, URL-encoded to handle
+// special characters like '/', '+', '=' that would break URL parsing.
+function buildRedisUrl(baseUrl, password) {
+  if (!password) return baseUrl;
+  const u = new URL(baseUrl);
+  u.password = encodeURIComponent(password);
+  return u.toString();
+}
+const redisClient = createClient({
+  url: buildRedisUrl(REDIS_URL, process.env.REDIS_PASSWORD)
+});
 redisClient.on("error", (err) => console.error("[Redis] Client Error", err));
 
 // --- SERVER STARTUP LOGIC ---
@@ -54,9 +69,6 @@ async function startServer() {
       standardHeaders: true,
       legacyHeaders: false,
       store: new RedisStore({
-        // Pass the client directly or sendCommand. 
-        // Since v4, passing the client directly is often supported by newer libs,
-        // but sendCommand is the standard way for rate-limit-redis.
         sendCommand: (...args) => redisClient.sendCommand(args),
       }),
       message: { error: "Too many requests" },
@@ -117,7 +129,7 @@ async function startServer() {
 
           res.json({ presentation_exchange_id, request_url: presentation_request });
         } catch (error) { next(error); }
-      },
+      }
     );
 
     // Webhook Handler (Protected)

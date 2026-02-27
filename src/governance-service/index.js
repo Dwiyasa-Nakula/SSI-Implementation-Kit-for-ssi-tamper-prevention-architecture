@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(helmet()); // Security Headers
 app.use(express.json());
 
@@ -28,7 +29,17 @@ if (!JWT_SECRET) {
     process.exit(1);
 }
 
-const redisClient = createClient({ url: REDIS_URL });
+// node-redis v4 ignores the `password` field when `url` is set.
+// Must embed the URL-encoded password directly in the connection URL.
+function buildRedisUrl(baseUrl, password) {
+    if (!password) return baseUrl;
+    const u = new URL(baseUrl);
+    u.password = encodeURIComponent(password);
+    return u.toString();
+}
+const redisClient = createClient({
+    url: buildRedisUrl(REDIS_URL, process.env.REDIS_PASSWORD)
+});
 redisClient.on('error', (err) => console.error('[Redis] Client Error', err));
 
 const VALIDATORS = {};
@@ -135,14 +146,22 @@ app.use((err, req, res, next) => {
 
 // --- SHUTDOWN LOGIC & SINGLE LISTEN ---
 const PORT = 3000;
-const server = app.listen(PORT, async () => {
-    await redisClient.connect();
-    console.log(`Governance Service running on port ${PORT}`);
-});
+let server;
 
-process.on('SIGTERM', async () => {
-    console.log('SIGTERM received. Shutting down gracefully...');
-    server.close(() => {
-        redisClient.quit().then(() => process.exit(0));
-    });
-});
+async function startService() {
+    try {
+        // Connect to Redis FIRST
+        await redisClient.connect();
+        console.log('[Redis] Client connected successfully.');
+
+        // THEN start accepting HTTP traffic
+        server = app.listen(PORT, () => {
+            console.log(`Governance Service running on port ${PORT}`);
+        });
+    } catch (err) {
+        console.error("Failed to start Governance Service:", err);
+        process.exit(1);
+    }
+}
+
+startService();

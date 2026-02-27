@@ -10,17 +10,20 @@ The system is built on **Kubernetes** orchestration and integrates industry secu
 ## ✨ Key Features
 
 ### 1. Security & Tamper Prevention
+
 - **Threshold Governance (k-of-n):** Prevents a *single point of compromise*. Credential revocation requires cryptographic signatures (Ed25519) from *k* independent validators before being written to the ledger.
 - **Immutable Audit Trail:** Every successful verification is recorded in a **Transparency Log** (Merkle Tree-based via Trillian/Rekor) to ensure verification history cannot be secretly altered.
 - **Zero-Trust Network:** Inter-service communication is restricted using **Kubernetes NetworkPolicies**. Only specific paths (e.g., Governance → Issuer) are allowed.
 - **Secret Management:** Sensitive credentials (Wallet Keys, DB Passwords, JWT Secrets) are securely injected via Kubernetes Secrets instead of being hardcoded.
 
 ### 2. Performance & Reliability
+
 - **Auto-Scaling (HPA):** The *Verification Gateway* and *Issuer Agent* automatically scale replicas (Pods) when CPU usage exceeds 60%.
 - **Distributed Rate Limiting:** Uses **Redis** to synchronize rate limits across pod replicas, preventing global DoS (Denial of Service) attacks.
 - **Graceful Shutdown:** Handles Kubernetes `SIGTERM` signals to close database connections and complete active requests before pod termination.
 
 ### 3. Privacy Preservation
+
 - **Verifiable Credentials & ZKP:** Verification occurs without raw data exchange using the *Present Proof* protocol from Hyperledger Aries.
 - **Sanitized Errors:** API responses are cleaned of sensitive stack traces to prevent information leakage.
 
@@ -70,22 +73,23 @@ ssi-production-kit/
 
 ## 🗺️ Architecture Mapping
 
-| Conceptual Component | Technology / Implementation | Location / Namespace | Port |
-|----------------------|----------------------------|----------------------|------|
-| **VDR (Ledger)** | Hyperledger Indy (VON) | External (Docker Host) | 9000 (Web), 9701–9708 |
-| **Issuer Agent** | ACA-Py (Government Issuer) | `ssi-network/issuer-agent` | 8000 (CDTP), 8001 (Admin) |
-| **Verifier Agent** | ACA-Py (Sidecar) | `ssi-network/verification-gateway` | 8020 (CDTP), 8021 (Admin) |
-| **Tamper Prevention** | Governance Service | `ssi-network/governance-service` | 3000 |
-| **Verification Logic** | Verification Gateway | `ssi-network/verification-gateway` | 4000 |
-| **Transparency Log** | Rekor Server | `ssi-network/rekor-server` | 3000 |
-| **Log Backend** | Trillian Log Server | `ssi-network/trillian-log-server` | 8090 (HTTP), 8091 (gRPC) |
-| **Immutable Storage** | MySQL 8.0 | `ssi-network/trillian-mysql` | 3306 |
+| Conceptual Component         | Technology / Implementation | Location / Namespace                 | Port                      |
+| ---------------------------- | --------------------------- | ------------------------------------ | ------------------------- |
+| **VDR (Ledger)**       | Hyperledger Indy (VON)      | External (Docker Host)               | 9000 (Web), 9701–9708    |
+| **Issuer Agent**       | ACA-Py (Government Issuer)  | `ssi-network/issuer-agent`         | 8000 (CDTP), 8001 (Admin) |
+| **Verifier Agent**     | ACA-Py (Sidecar)            | `ssi-network/verification-gateway` | 8020 (CDTP), 8021 (Admin) |
+| **Tamper Prevention**  | Governance Service          | `ssi-network/governance-service`   | 3000                      |
+| **Verification Logic** | Verification Gateway        | `ssi-network/verification-gateway` | 4000                      |
+| **Transparency Log**   | Rekor Server                | `ssi-network/rekor-server`         | 3000                      |
+| **Log Backend**        | Trillian Log Server         | `ssi-network/trillian-log-server`  | 8090 (HTTP), 8091 (gRPC)  |
+| **Immutable Storage**  | MySQL 8.0                   | `ssi-network/trillian-mysql`       | 3306                      |
 
 ---
 
 ## 🏗️ Setup Guide
 
 ### 1. Prerequisites
+
 - **Docker Desktop** (with Kubernetes enabled)
 - **kubectl** CLI
 - **Git**
@@ -111,7 +115,7 @@ Ensure the Web UI is accessible at: `http://localhost:9000`
 
 ### 3. Build & Deploy SSI Kit
 
-#### Build Local Images (If scripts changed)
+#### Build Local Images
 
 ```powershell
 # Governance Service
@@ -121,6 +125,24 @@ docker build -t dn06/ssi:governance-service-v1 .
 # Verification Gateway
 cd ../verification-gateway
 docker build -t dn06/ssi:gateway-middleware-v1 .
+```
+
+#### Making secreat key
+
+```
+cp k8s-secrets.template.yaml k8s-secrets.yaml
+```
+
+Edit the k8s-secrets.yaml
+
+```
+openssl rand -base64 32
+```
+
+Apply secrets:
+
+```
+kubectl apply -f k8s-secrets.yaml
 ```
 
 #### Deploy to Kubernetes
@@ -161,6 +183,7 @@ curl -X POST http://localhost:3000/proposals \
 ```
 
 Output:
+
 ```json
 {"proposalId": "uuid-123...", "status": "PENDING"}
 ```
