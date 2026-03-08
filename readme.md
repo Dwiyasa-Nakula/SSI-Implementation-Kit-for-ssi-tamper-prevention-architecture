@@ -143,7 +143,28 @@ Pastikan semua pod berstatus `Running`:
 kubectl get pods -n ssi-network
 ```
 
-## 🧪 Skenario Pengujian (Step-by-Step)
+## 🧪 Pengujian Otomatis (End-to-End Test)
+
+Proyek ini menyertakan skrip Python untuk melakukan simulasi siklus hidup SSI lengkap (Issuance & Verification) secara otomatis tanpa perlu Mobile Wallet eksternal:
+
+```powershell
+# 1. Buka 3 terminal terpisah dan lakukan port-forward layanan K8s
+kubectl port-forward svc/issuer-agent 8001:8001 -n ssi-network
+kubectl port-forward svc/verification-gateway 4000:4000 -n ssi-network
+kubectl port-forward svc/holder-agent 8031:8031 -n ssi-network
+
+# 2. Jalankan skrip E2E di terminal baru
+python src/test_e2e.py
+```
+
+Skrip ini akan secara otomatis:
+1. Mendaftarkan DID secara otomatis pada VON Network lokal.
+2. Memublikasikan Schema & Credential Definition.
+3. Membuat koneksi OOB DIDComm antara Issuer & simulasi Holder Agent.
+4. Menerbitkan Credential dari Issuer lalu menyimpannya di Holder.
+5. Mensimulasikan Verification Gateway merikues dari Holder dan mencatat audit di Rekor.
+
+## 🎛️ Skenario Pengujian Manual (Step-by-Step)
 
 ### A. Mekanisme Threshold Revocation (Admin)
 

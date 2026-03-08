@@ -166,7 +166,41 @@ kubectl get pods -n ssi-network
 
 ## 🧪 Testing Scenarios (Step-by-Step)
 
-### A. Threshold Revocation Mechanism (Admin)
+### A. End-to-End Workflow Testing (Automated)
+
+To test the entire SSI workflow from issuance to verification autonomously, use the provided End-to-End (E2E) test script. This script orchestrates an ephemeral Holder wallet and connects with the Issuer and Verification Gateway.
+
+#### Step 1: Port-Forward Services
+Open three separate terminals and run the following commands to expose the required Kubernetes services locally:
+
+```bash
+kubectl port-forward svc/issuer-agent 8001:8001 -n ssi-network
+kubectl port-forward svc/verification-gateway 4000:4000 -n ssi-network
+kubectl port-forward svc/holder-agent 8031:8031 -n ssi-network
+```
+
+#### Step 2: Run the E2E Script
+Ensure you have the required Python dependencies installed (`requests`, `colorama`). Then, run the script from the root directory:
+
+```bash
+# Install dependencies if you haven't already
+pip install requests colorama
+
+# Run the test
+python src/test_e2e.py
+```
+
+**Result:** The script will automatically:
+1. Register the Issuer DID and create schemas/credential definitions.
+2. Establish a connection between the Issuer and the Holder wallet.
+3. Issue a verifiable credential to the Holder.
+4. Simulate the Relaying Party requesting verification via the Gateway.
+5. The Holder creates and presents a proof.
+6. The Gateway verifies the proof and logs the transaction to Rekor.
+
+---
+
+### B. Threshold Revocation Mechanism (Admin)
 
 Prevents unilateral credential revocation.
 
@@ -205,7 +239,7 @@ curl -X POST http://localhost:3000/proposals/<PROPOSAL_ID>/approve \
 
 ---
 
-### B. Secure Verification & Audit Trail (Verifier)
+### C. Secure Verification & Audit Trail (Verifier)
 
 #### Step 1: Send Verification Request
 
