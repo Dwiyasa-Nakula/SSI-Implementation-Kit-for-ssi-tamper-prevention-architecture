@@ -275,4 +275,4 @@ curl http://localhost:3000/api/v1/log/entries?logIndex=0
 
 ---
 
-*This project is a final thesis for undergraduate program in Technology Informatics, Sepuluh Nopember Institute of Technology, Surabaya.*
+*This project is a final thesis for undergraduate program in Information Technology, Sepuluh Nopember Institute of Technology, Surabaya.*

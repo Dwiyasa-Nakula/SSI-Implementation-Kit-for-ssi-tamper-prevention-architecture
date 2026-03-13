@@ -234,4 +234,4 @@ curl http://localhost:3000/api/v1/log/entries?logIndex=0
 
 ---
 
-*Project ini adalah tugas akhir untuk program sarjana Teknik Informatika, Institut Teknologi Sepuluh Nopember, Surabaya.*
+*Project ini adalah tugas akhir untuk program sarjana Teknologi Informasi, Institut Teknologi Sepuluh Nopember, Surabaya.*
