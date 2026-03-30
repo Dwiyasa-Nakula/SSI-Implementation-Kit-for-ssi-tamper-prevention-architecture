@@ -167,11 +167,11 @@ items:
               imagePullPolicy: IfNotPresent
               resources:
                 requests:
-                  cpu: "250m"
-                  memory: "512Mi"
-                limits:
                   cpu: "2"
-                  memory: "2Gi"
+                  memory: "4Gi"
+                limits:
+                  cpu: "6"
+                  memory: "16Gi"
               env:
                 - name: POSTGRES_USER
                   value: "indy"
@@ -349,11 +349,11 @@ items:
                   mountPath: /docker-entrypoint-initdb.d
               resources:
                 requests:
-                  cpu: "250m"
-                  memory: "512Mi"
-                limits:
                   cpu: "2"
-                  memory: "2Gi"
+                  memory: "4Gi"
+                limits:
+                  cpu: "6"
+                  memory: "16Gi"
           volumes:
             - name: schema-volume
               configMap:
@@ -400,11 +400,11 @@ items:
                 - containerPort: 8091
               resources:
                 requests:
-                  cpu: "250m"
-                  memory: "512Mi"
-                limits:
                   cpu: "2"
-                  memory: "2Gi"
+                  memory: "4Gi"
+                limits:
+                  cpu: "6"
+                  memory: "16Gi"
           initContainers:
             - name: wait-for-mysql
               image: busybox
@@ -463,11 +463,11 @@ items:
                 - containerPort: 8091
               resources:
                 requests:
-                  cpu: "250m"
-                  memory: "512Mi"
-                limits:
                   cpu: "2"
-                  memory: "2Gi"
+                  memory: "4Gi"
+                limits:
+                  cpu: "6"
+                  memory: "16Gi"
           initContainers:
             - name: wait-for-mysql
               image: busybox
@@ -520,11 +520,11 @@ items:
                 - containerPort: 3000
               resources:
                 requests:
-                  cpu: "250m"
-                  memory: "512Mi"
-                limits:
                   cpu: "2"
-                  memory: "2Gi"
+                  memory: "4Gi"
+                limits:
+                  cpu: "6"
+                  memory: "16Gi"
           initContainers:
             - name: wait-for-trillian
               image: busybox
@@ -569,11 +569,11 @@ items:
               imagePullPolicy: IfNotPresent
               resources:
                 requests:
-                  cpu: "100m"
-                  memory: "256Mi"
-                limits:
-                  cpu: "2"
+                  cpu: "1"
                   memory: "1Gi"
+                limits:
+                  cpu: "8"
+                  memory: "4Gi"
               ports:
                 - containerPort: 8000
                 - containerPort: 8001
@@ -676,11 +676,11 @@ items:
               imagePullPolicy: IfNotPresent
               resources:
                 requests:
-                  cpu: "100m"
-                  memory: "256Mi"
-                limits:
-                  cpu: "2"
+                  cpu: "1"
                   memory: "1Gi"
+                limits:
+                  cpu: "8"
+                  memory: "4Gi"
               ports:
                 - containerPort: 8030
                 - containerPort: 8031
@@ -757,11 +757,11 @@ items:
               imagePullPolicy: IfNotPresent
               resources:
                 requests:
-                  cpu: "100m"
-                  memory: "128Mi"
+                  cpu: "500m"
+                  memory: "512Mi"
                 limits:
-                  cpu: "1"
-                  memory: "1Gi"
+                  cpu: "4"
+                  memory: "2Gi"
               env:
                 - name: ISSUER_ADMIN_URL
                   value: "http://issuer-agent:8001"
@@ -814,7 +814,7 @@ items:
       name: verification-gateway
       namespace: ssi-network
     spec:
-      replicas: 3 
+      replicas: 3
       selector:
         matchLabels:
           app: verification-gateway
@@ -829,11 +829,11 @@ items:
               imagePullPolicy: IfNotPresent
               resources:
                 requests:
-                  cpu: "100m"
-                  memory: "128Mi"
+                  cpu: "500m"
+                  memory: "512Mi"
                 limits:
-                  cpu: "1"
-                  memory: "1Gi"
+                  cpu: "4"
+                  memory: "2Gi"
               env:
                 - name: AGENT_ADMIN_URL
                   value: "http://127.0.0.1:8021"
@@ -879,11 +879,11 @@ items:
               imagePullPolicy: IfNotPresent
               resources:
                 requests:
-                  cpu: "100m"
-                  memory: "256Mi"
-                limits:
                   cpu: "1"
-                  memory: "2Gi"
+                  memory: "1Gi"
+                limits:
+                  cpu: "8"
+                  memory: "4Gi"
               ports:
                 - containerPort: 8020
                 - containerPort: 8021
