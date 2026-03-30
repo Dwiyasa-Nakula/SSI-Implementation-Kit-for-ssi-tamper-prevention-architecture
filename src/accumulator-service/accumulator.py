@@ -216,8 +216,9 @@ class RSAAccumulator:
 
         # Extended GCD: s·prime_x + t·P = gcd = 1
         s, t, gcd_val = gcdex(p_x, P)
-        # Bezout: s·p_x + t·P = 1
-        # Verification needs: P·a + b·p_x = 1  →  a = t, b = s
+        # Verification checks: A^a · d^p_x ≡ g (mod n)
+        # Expanding: g^(P·a) · g^(b·p_x) = g^(P·a + b·p_x) = g^1
+        # So we need: P·a + b·p_x = 1  →  a = t, b = s  (NOT a=s, b=t)
         a, b = int(t), int(s)
 
         if gcd_val != 1:
