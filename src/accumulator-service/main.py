@@ -125,13 +125,11 @@ async def lifespan(app: FastAPI):
         import redis as _redis_lib
         redis_url  = os.getenv("REDIS_URL", "redis://localhost:6379")
         redis_pass = os.getenv("REDIS_PASSWORD")
+        kwargs = {"decode_responses": False}
         if redis_pass:
-            from urllib.parse import urlparse, urlunparse
-            u = urlparse(redis_url)
-            redis_url = urlunparse(
-                u._replace(netloc=f":{redis_pass}@{u.hostname}:{u.port or 6379}")
-            )
-        _redis = _redis_lib.from_url(redis_url, decode_responses=False)
+            kwargs["password"] = redis_pass
+            
+        _redis = _redis_lib.from_url(redis_url, **kwargs)
         _redis.ping()
         logger.info("Redis connected")
     except Exception as exc:
