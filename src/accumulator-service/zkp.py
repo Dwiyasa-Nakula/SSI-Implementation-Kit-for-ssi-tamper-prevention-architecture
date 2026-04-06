@@ -83,21 +83,33 @@ class ZKPProver:
             logger.warning("Non-membership proof requested for member element")
             return None
 
+        # Rerandomize the witness to achieve strong unlinkability (PRI-04)
+        # a' = a - r * prime_x
+        # d' = d * A^r mod n
+        r = secrets.randbelow(2**128)
+        a_orig = int(witness["a"])
+        d_orig = int(witness["d"])
+        x      = int(witness["prime_x"])
+        
+        a_rand = a_orig - (r * x)
+        d_rand = (d_orig * pow(self.acc.A, r, self.acc.n)) % self.acc.n
+
         proof_hash = hashlib.sha256(
-            f"{commitment}:{witness['a']}:{witness['d']}:{nonce}".encode()
+            f"{commitment}:{a_rand}:{d_rand}:{nonce}".encode()
         ).hexdigest()
 
         return {
             "proof_type": "rsa_non_membership_zkp",
             "commitment": commitment,
-            "witness_a": witness["a"],
-            "witness_d": witness["d"],
-            "prime_x": witness["prime_x"],
+            "witness_a": str(a_rand),
+            "witness_d": str(d_rand),
+            "prime_x": str(x),
             "accumulator_epoch": witness["epoch"],
             "nonce": nonce,
             "proof_hash": proof_hash,
             "timestamp": time.time(),
             "_note": (
+                "Witness (a, d) is rerandomized per presentation. "
                 "In production the prover runs locally on the holder device. "
                 "The verifier never sees cred_hash — only this proof bundle."
             ),

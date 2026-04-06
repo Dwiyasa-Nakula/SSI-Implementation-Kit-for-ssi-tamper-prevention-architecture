@@ -25,7 +25,7 @@ items:
         spec:
           containers:
             - name: accumulator
-              image: dn06/ssi:accumulator-service-v2
+              image: dn06/ssi:accumulator-service-v5
               imagePullPolicy: IfNotPresent
               ports:
                 - containerPort: 8080

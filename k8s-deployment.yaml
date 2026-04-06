@@ -218,23 +218,23 @@ items:
     data:
       validator_1.pub: |
         -----BEGIN PUBLIC KEY-----
-        MCowBQYDK2VwAyEA/WdbM+2xT5v3tE1qk6x7W2x3+7j7X9x8x3+7j7X9x8w=
+        MCowBQYDK2VwAyEAIU0p48CTTkbIqA9q/3k6cmMHLL1SXXMFYrGFY5ugkv0=
         -----END PUBLIC KEY-----
       validator_2.pub: |
         -----BEGIN PUBLIC KEY-----
-        MCowBQYDK2VwAyEA+9x8x3+7j7X9x8x3+7j7X9x8x3+7j7X9x8x3+7j7X9w=
+        MCowBQYDK2VwAyEAL41pGQQkbhIShHSfYetBRbFuevNZiutc1aeV5VIh+Cc=
         -----END PUBLIC KEY-----
       validator_3.pub: |
         -----BEGIN PUBLIC KEY-----
-        MCowBQYDK2VwAyEA/WdbM+2xT5v3tE1qk6x7W2x3+7j7X9x8x3+7j7X9x8A=
+        MCowBQYDK2VwAyEAUEeVJEx+UPpHn5jkG+QzFjkloEPWHwBvz7WIwy9LmH0=
         -----END PUBLIC KEY-----
       validator_4.pub: |
         -----BEGIN PUBLIC KEY-----
-        MCowBQYDK2VwAyEA/WdbM+2xT5v3tE1qk6x7W2x3+7j7X9x8x3+7j7X9x8B=
+        MCowBQYDK2VwAyEA9LFdn/9APbGTx9GPKtCxYxRKpl82Y16/m8ksXTQNyrs=
         -----END PUBLIC KEY-----
       validator_5.pub: |
         -----BEGIN PUBLIC KEY-----
-        MCowBQYDK2VwAyEA/WdbM+2xT5v3tE1qk6x7W2x3+7j7X9x8x3+7j7X9x8C=
+        MCowBQYDK2VwAyEAY5ApIVug/etkjlaqofWZW5VPKCveduegB0nf2penO/k=
         -----END PUBLIC KEY-----
   # ConfigMap Schema (SQL)
   - apiVersion: v1
@@ -1002,3 +1002,174 @@ items:
                     name: governance-service
                     port:
                       number: 3000
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # ACCUMULATOR SERVICE
+  # ─────────────────────────────────────────────────────────────────────────
+
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: accumulator-service
+      namespace: ssi-network
+    spec:
+      # Single replica for PoC (accumulator state must be consistent).
+      # Production: use a replicated state machine or external DB for state.
+      replicas: 1
+      selector:
+        matchLabels:
+          app: accumulator-service
+      template:
+        metadata:
+          labels:
+            app: accumulator-service
+        spec:
+          containers:
+            - name: accumulator
+              image: dn06/ssi:accumulator-service-v5
+              imagePullPolicy: IfNotPresent
+              ports:
+                - containerPort: 8080
+              env:
+                - name: API_KEYS
+                  valueFrom:
+                    secretKeyRef: { name: ssi-secrets, key: API_KEYS }
+                - name: REDIS_URL
+                  value: "redis://redis-store:6379"
+                - name: REDIS_PASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: ssi-secrets, key: REDIS_PASSWORD }
+                - name: PARAMS_FILE
+                  value: "/data/acc_params.json"
+                - name: RSA_KEY_BITS
+                  value: "1024"    # Change to 2048 for production
+                - name: ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef: { name: ssi-secrets, key: JWT_SECRET }
+              volumeMounts:
+                - name: acc-data
+                  mountPath: /data
+              livenessProbe:
+                httpGet:
+                  path: /health
+                  port: 8080
+                initialDelaySeconds: 20
+                periodSeconds: 15
+              readinessProbe:
+                httpGet:
+                  path: /health
+                  port: 8080
+                initialDelaySeconds: 10
+                periodSeconds: 5
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "2"
+                  memory: "2Gi"
+          volumes:
+            - name: acc-data
+              emptyDir: {}        # Use PVC in production
+          imagePullSecrets:
+            - name: dockerhub-secret
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: accumulator-service
+      namespace: ssi-network
+    spec:
+      selector:
+        app: accumulator-service
+      ports:
+        - port: 8080
+          name: http
+
+  # Network policy: only VG and Governance can talk to accumulator
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: allow-accumulator-access
+      namespace: ssi-network
+    spec:
+      podSelector:
+        matchLabels:
+          app: accumulator-service
+      policyTypes: [Ingress]
+      ingress:
+        - from:
+            - podSelector: { matchLabels: { app: verification-gateway } }
+            - podSelector: { matchLabels: { app: governance-service } }
+            - podSelector: { matchLabels: { app: issuer-agent } }
+          ports:
+            - port: 8080
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # INGRESS — add accumulator route
+  # ─────────────────────────────────────────────────────────────────────────
+
+  - apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: ssi-accumulator-ingress
+      namespace: ssi-network
+      annotations:
+        nginx.ingress.kubernetes.io/rewrite-target: /$2
+        nginx.ingress.kubernetes.io/enable-cors: "true"
+    spec:
+      ingressClassName: nginx
+      rules:
+        - http:
+            paths:
+              - path: /api/acc(/|$)(.*)
+                pathType: Prefix
+                backend:
+                  service:
+                    name: accumulator-service
+                    port:
+                      number: 8080
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # HPA — auto-scaling for VG and Issuer
+  # ─────────────────────────────────────────────────────────────────────────
+
+  - apiVersion: autoscaling/v2
+    kind: HorizontalPodAutoscaler
+    metadata:
+      name: verification-gateway-hpa
+      namespace: ssi-network
+    spec:
+      scaleTargetRef:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: verification-gateway
+      minReplicas: 2
+      maxReplicas: 10
+      metrics:
+        - type: Resource
+          resource:
+            name: cpu
+            target:
+              type: Utilization
+              averageUtilization: 60
+
+  - apiVersion: autoscaling/v2
+    kind: HorizontalPodAutoscaler
+    metadata:
+      name: issuer-agent-hpa
+      namespace: ssi-network
+    spec:
+      scaleTargetRef:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: issuer-agent
+      minReplicas: 2
+      maxReplicas: 5
+      metrics:
+        - type: Resource
+          resource:
+            name: cpu
+            target:
+              type: Utilization
+              averageUtilization: 60
