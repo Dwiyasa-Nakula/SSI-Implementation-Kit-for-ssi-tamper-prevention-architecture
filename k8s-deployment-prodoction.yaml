@@ -1085,7 +1085,7 @@ items:
         spec:
           containers:
             - name: node
-              image: ghcr.io/bcgov/von-network:latest
+              image: dn06/ssi:von-network-v1
               imagePullPolicy: IfNotPresent
               command: ["bash", "-c", "./scripts/start_node.sh 1"]
               env:
@@ -1108,6 +1108,8 @@ items:
               volumeMounts:
                 - name: ledger-data
                   mountPath: /home/indy/ledger
+          imagePullSecrets:
+            - name: dockerhub-secret
           volumes:
             - name: ledger-data
               emptyDir: {}
@@ -1143,7 +1145,7 @@ items:
         spec:
           containers:
             - name: node
-              image: ghcr.io/bcgov/von-network:latest
+              image: dn06/ssi:von-network-v1
               imagePullPolicy: IfNotPresent
               command: ["bash", "-c", "./scripts/start_node.sh 2"]
               env:
@@ -1166,6 +1168,8 @@ items:
               volumeMounts:
                 - name: ledger-data
                   mountPath: /home/indy/ledger
+          imagePullSecrets:
+            - name: dockerhub-secret
           volumes:
             - name: ledger-data
               emptyDir: {}
@@ -1201,7 +1205,7 @@ items:
         spec:
           containers:
             - name: node
-              image: ghcr.io/bcgov/von-network:latest
+              image: dn06/ssi:von-network-v1
               imagePullPolicy: IfNotPresent
               command: ["bash", "-c", "./scripts/start_node.sh 3"]
               env:
@@ -1224,6 +1228,8 @@ items:
               volumeMounts:
                 - name: ledger-data
                   mountPath: /home/indy/ledger
+          imagePullSecrets:
+            - name: dockerhub-secret
           volumes:
             - name: ledger-data
               emptyDir: {}
@@ -1259,7 +1265,7 @@ items:
         spec:
           containers:
             - name: node
-              image: ghcr.io/bcgov/von-network:latest
+              image: dn06/ssi:von-network-v1
               imagePullPolicy: IfNotPresent
               command: ["bash", "-c", "./scripts/start_node.sh 4"]
               env:
@@ -1282,6 +1288,8 @@ items:
               volumeMounts:
                 - name: ledger-data
                   mountPath: /home/indy/ledger
+          imagePullSecrets:
+            - name: dockerhub-secret
           volumes:
             - name: ledger-data
               emptyDir: {}
@@ -1315,15 +1323,9 @@ items:
             app: von-webserver
             network: von
         spec:
-          initContainers:
-            - name: wait-for-nodes
-              image: busybox
-              command:
-                ["sh", "-c",
-                 "until nc -z von-node-1 9701 && nc -z von-node-2 9703 && nc -z von-node-3 9705 && nc -z von-node-4 9707; do echo waiting for von nodes; sleep 3; done;"]
           containers:
             - name: webserver
-              image: ghcr.io/bcgov/von-network:latest
+              image: dn06/ssi:von-network-v1
               imagePullPolicy: IfNotPresent
               command: ["bash", "-c", "sleep 10 && ./scripts/start_webserver.sh"]
               env:
@@ -1346,6 +1348,8 @@ items:
                 limits:
                   cpu: "500m"
                   memory: "512Mi"
+          imagePullSecrets:
+            - name: dockerhub-secret
 
   - apiVersion: v1
     kind: Service
