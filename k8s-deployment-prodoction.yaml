@@ -44,6 +44,22 @@ items:
               port: 8020
             - protocol: TCP
               port: 8030
+            - protocol: TCP
+              port: 9701
+            - protocol: TCP
+              port: 9702
+            - protocol: TCP
+              port: 9703
+            - protocol: TCP
+              port: 9704
+            - protocol: TCP
+              port: 9705
+            - protocol: TCP
+              port: 9706
+            - protocol: TCP
+              port: 9707
+            - protocol: TCP
+              port: 9708
 
   # RESTRICTIVE POLICIES
   - apiVersion: networking.k8s.io/v1
@@ -70,18 +86,7 @@ items:
             - podSelector: { matchLabels: { app: verification-gateway } }
           ports: [{ port: 8000 }]
       
-  - apiVersion: networking.k8s.io/v1
-    kind: NetworkPolicy
-    metadata:
-      name: allow-didcomm-issuer
-      namespace: ssi-network
-    spec:
-      podSelector: { matchLabels: { app: issuer-agent } }
-      ingress:
-        - from: 
-            - podSelector: { matchLabels: { app: holder-agent } }
-            - podSelector: { matchLabels: { app: verification-gateway } }
-          ports: [{ port: 8000 }]
+
 
   - apiVersion: networking.k8s.io/v1
     kind: NetworkPolicy
@@ -105,6 +110,7 @@ items:
         - from: 
             - podSelector: { matchLabels: { app: governance-service } }
             - podSelector: { matchLabels: { app: verification-gateway } }
+            - podSelector: { matchLabels: { app: accumulator-service } }
           ports: [{ port: 6379 }]
 
   # --- SHARED INFRASTRUCTURE (REDIS) ---
@@ -126,13 +132,20 @@ items:
           containers:
             - name: redis
               image: redis:7.0.11-alpine
-              command: ["redis-server", "--requirepass", "$(REDIS_PASSWORD)"]
+              command: ["redis-server", "--requirepass", "$(REDIS_PASSWORD)", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
               env:
                 - name: REDIS_PASSWORD
                   valueFrom:
                     secretKeyRef: { name: ssi-secrets, key: REDIS_PASSWORD }
               imagePullPolicy: IfNotPresent
               ports: [{ containerPort: 6379 }]
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
 
   - apiVersion: v1
     kind: Service
@@ -607,7 +620,7 @@ items:
                 - "--wallet-storage-creds"
                 - "$(WALLET_CREDS)"
                 - "--genesis-url"
-                - "http://host.docker.internal:9000/genesis"
+                - "http://von-webserver:8000/genesis"
                 - "--auto-provision"
                 - "--auto-accept-invites"
                 - "--auto-accept-requests"
@@ -707,7 +720,7 @@ items:
                 - "--wallet-key"
                 - "holder_key"
                 - "--genesis-url"
-                - "http://host.docker.internal:9000/genesis"
+                - "http://von-webserver:8000/genesis"
                 - "--auto-provision"
                 - "--auto-accept-invites"
                 - "--auto-accept-requests"
@@ -790,6 +803,12 @@ items:
                   port: 3000
                 initialDelaySeconds: 10
                 periodSeconds: 10
+              readinessProbe:
+                httpGet:
+                  path: /health
+                  port: 3000
+                initialDelaySeconds: 5
+                periodSeconds: 5
           imagePullSecrets:
             - name: dockerhub-secret
           volumes:
@@ -873,6 +892,18 @@ items:
                       key: API_KEYS
               ports:
                 - containerPort: 4000
+              livenessProbe:
+                httpGet:
+                  path: /health
+                  port: 4000
+                initialDelaySeconds: 15
+                periodSeconds: 15
+              readinessProbe:
+                httpGet:
+                  path: /health
+                  port: 4000
+                initialDelaySeconds: 10
+                periodSeconds: 5
 
             - name: verifier-agent
               image: bcgovimages/aries-cloudagent:py3.12_1.0.0
@@ -919,7 +950,7 @@ items:
                 - "--wallet-storage-creds"
                 - "$(WALLET_CREDS)"
                 - "--genesis-url"
-                - "http://host.docker.internal:9000/genesis"
+                - "http://von-webserver:8000/genesis"
                 - "--auto-provision"
                 - "--auto-accept-invites"
                 - "--auto-accept-requests"
@@ -1002,3 +1033,499 @@ items:
                     name: governance-service
                     port:
                       number: 3000
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # VON NETWORK — 4-Node Indy Ledger Cluster
+  # ─────────────────────────────────────────────────────────────────────────
+
+  # NetworkPolicy: allow inter-node and agent-to-webserver communication
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: allow-von-network
+      namespace: ssi-network
+    spec:
+      podSelector:
+        matchLabels:
+          network: von
+      policyTypes: [Ingress]
+      ingress:
+        - from:
+            - podSelector: { matchLabels: { network: von } }
+            - podSelector: { matchLabels: { app: issuer-agent } }
+            - podSelector: { matchLabels: { app: holder-agent } }
+            - podSelector: { matchLabels: { app: verification-gateway } }
+          ports:
+            - { port: 8000 }     # webserver / genesis
+            - { port: 9701 }
+            - { port: 9702 }
+            - { port: 9703 }
+            - { port: 9704 }
+            - { port: 9705 }
+            - { port: 9706 }
+            - { port: 9707 }
+            - { port: 9708 }
+
+  # VON Node 1
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: von-node-1
+      namespace: ssi-network
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: von-node-1
+      template:
+        metadata:
+          labels:
+            app: von-node-1
+            network: von
+        spec:
+          containers:
+            - name: node
+              image: ghcr.io/bcgov/von-network:latest
+              imagePullPolicy: IfNotPresent
+              command: ["bash", "-c", "./scripts/start_node.sh 1"]
+              env:
+                - name: IP
+                  value: "0.0.0.0"
+                - name: IPS
+                  value: "von-node-1,von-node-2,von-node-3,von-node-4"
+                - name: RUST_LOG
+                  value: "warning"
+              ports:
+                - containerPort: 9701
+                - containerPort: 9702
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+              volumeMounts:
+                - name: ledger-data
+                  mountPath: /home/indy/ledger
+          volumes:
+            - name: ledger-data
+              emptyDir: {}
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: von-node-1
+      namespace: ssi-network
+    spec:
+      selector:
+        app: von-node-1
+      ports:
+        - { port: 9701, name: client }
+        - { port: 9702, name: node }
+
+  # VON Node 2
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: von-node-2
+      namespace: ssi-network
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: von-node-2
+      template:
+        metadata:
+          labels:
+            app: von-node-2
+            network: von
+        spec:
+          containers:
+            - name: node
+              image: ghcr.io/bcgov/von-network:latest
+              imagePullPolicy: IfNotPresent
+              command: ["bash", "-c", "./scripts/start_node.sh 2"]
+              env:
+                - name: IP
+                  value: "0.0.0.0"
+                - name: IPS
+                  value: "von-node-1,von-node-2,von-node-3,von-node-4"
+                - name: RUST_LOG
+                  value: "warning"
+              ports:
+                - containerPort: 9703
+                - containerPort: 9704
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+              volumeMounts:
+                - name: ledger-data
+                  mountPath: /home/indy/ledger
+          volumes:
+            - name: ledger-data
+              emptyDir: {}
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: von-node-2
+      namespace: ssi-network
+    spec:
+      selector:
+        app: von-node-2
+      ports:
+        - { port: 9703, name: client }
+        - { port: 9704, name: node }
+
+  # VON Node 3
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: von-node-3
+      namespace: ssi-network
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: von-node-3
+      template:
+        metadata:
+          labels:
+            app: von-node-3
+            network: von
+        spec:
+          containers:
+            - name: node
+              image: ghcr.io/bcgov/von-network:latest
+              imagePullPolicy: IfNotPresent
+              command: ["bash", "-c", "./scripts/start_node.sh 3"]
+              env:
+                - name: IP
+                  value: "0.0.0.0"
+                - name: IPS
+                  value: "von-node-1,von-node-2,von-node-3,von-node-4"
+                - name: RUST_LOG
+                  value: "warning"
+              ports:
+                - containerPort: 9705
+                - containerPort: 9706
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+              volumeMounts:
+                - name: ledger-data
+                  mountPath: /home/indy/ledger
+          volumes:
+            - name: ledger-data
+              emptyDir: {}
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: von-node-3
+      namespace: ssi-network
+    spec:
+      selector:
+        app: von-node-3
+      ports:
+        - { port: 9705, name: client }
+        - { port: 9706, name: node }
+
+  # VON Node 4
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: von-node-4
+      namespace: ssi-network
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: von-node-4
+      template:
+        metadata:
+          labels:
+            app: von-node-4
+            network: von
+        spec:
+          containers:
+            - name: node
+              image: ghcr.io/bcgov/von-network:latest
+              imagePullPolicy: IfNotPresent
+              command: ["bash", "-c", "./scripts/start_node.sh 4"]
+              env:
+                - name: IP
+                  value: "0.0.0.0"
+                - name: IPS
+                  value: "von-node-1,von-node-2,von-node-3,von-node-4"
+                - name: RUST_LOG
+                  value: "warning"
+              ports:
+                - containerPort: 9707
+                - containerPort: 9708
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+              volumeMounts:
+                - name: ledger-data
+                  mountPath: /home/indy/ledger
+          volumes:
+            - name: ledger-data
+              emptyDir: {}
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: von-node-4
+      namespace: ssi-network
+    spec:
+      selector:
+        app: von-node-4
+      ports:
+        - { port: 9707, name: client }
+        - { port: 9708, name: node }
+
+  # VON Webserver (Genesis + Ledger Browser)
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: von-webserver
+      namespace: ssi-network
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: von-webserver
+      template:
+        metadata:
+          labels:
+            app: von-webserver
+            network: von
+        spec:
+          initContainers:
+            - name: wait-for-nodes
+              image: busybox
+              command:
+                ["sh", "-c",
+                 "until nc -z von-node-1 9701 && nc -z von-node-2 9703 && nc -z von-node-3 9705 && nc -z von-node-4 9707; do echo waiting for von nodes; sleep 3; done;"]
+          containers:
+            - name: webserver
+              image: ghcr.io/bcgov/von-network:latest
+              imagePullPolicy: IfNotPresent
+              command: ["bash", "-c", "sleep 10 && ./scripts/start_webserver.sh"]
+              env:
+                - name: IP
+                  value: "0.0.0.0"
+                - name: IPS
+                  value: "von-node-1,von-node-2,von-node-3,von-node-4"
+                - name: RUST_LOG
+                  value: "warning"
+                - name: REGISTER_NEW_DIDS
+                  value: "True"
+                - name: LEDGER_INSTANCE_NAME
+                  value: "SSI-Network"
+              ports:
+                - containerPort: 8000
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: von-webserver
+      namespace: ssi-network
+    spec:
+      selector:
+        app: von-webserver
+      ports:
+        - port: 8000
+          name: http
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # ACCUMULATOR SERVICE
+  # ─────────────────────────────────────────────────────────────────────────
+
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: accumulator-service
+      namespace: ssi-network
+    spec:
+      # Single replica for PoC (accumulator state must be consistent).
+      # Production: use a replicated state machine or external DB for state.
+      replicas: 1
+      selector:
+        matchLabels:
+          app: accumulator-service
+      template:
+        metadata:
+          labels:
+            app: accumulator-service
+        spec:
+          containers:
+            - name: accumulator
+              image: dn06/ssi:accumulator-service-v5
+              imagePullPolicy: IfNotPresent
+              ports:
+                - containerPort: 8080
+              env:
+                - name: API_KEYS
+                  valueFrom:
+                    secretKeyRef: { name: ssi-secrets, key: API_KEYS }
+                - name: REDIS_URL
+                  value: "redis://redis-store:6379"
+                - name: REDIS_PASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: ssi-secrets, key: REDIS_PASSWORD }
+                - name: PARAMS_FILE
+                  value: "/data/acc_params.json"
+                - name: RSA_KEY_BITS
+                  value: "2048"
+                - name: ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef: { name: ssi-secrets, key: JWT_SECRET }
+              volumeMounts:
+                - name: acc-data
+                  mountPath: /data
+              livenessProbe:
+                httpGet:
+                  path: /health
+                  port: 8080
+                initialDelaySeconds: 20
+                periodSeconds: 15
+              readinessProbe:
+                httpGet:
+                  path: /health
+                  port: 8080
+                initialDelaySeconds: 10
+                periodSeconds: 5
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "2"
+                  memory: "2Gi"
+          volumes:
+            - name: acc-data
+              emptyDir: {}        # Use PVC in production
+          imagePullSecrets:
+            - name: dockerhub-secret
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: accumulator-service
+      namespace: ssi-network
+    spec:
+      selector:
+        app: accumulator-service
+      ports:
+        - port: 8080
+          name: http
+
+  # Network policy: only VG and Governance can talk to accumulator
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: allow-accumulator-access
+      namespace: ssi-network
+    spec:
+      podSelector:
+        matchLabels:
+          app: accumulator-service
+      policyTypes: [Ingress]
+      ingress:
+        - from:
+            - podSelector: { matchLabels: { app: verification-gateway } }
+            - podSelector: { matchLabels: { app: governance-service } }
+            - podSelector: { matchLabels: { app: issuer-agent } }
+          ports:
+            - port: 8080
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # INGRESS — add accumulator route
+  # ─────────────────────────────────────────────────────────────────────────
+
+  - apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: ssi-accumulator-ingress
+      namespace: ssi-network
+      annotations:
+        nginx.ingress.kubernetes.io/rewrite-target: /$2
+        nginx.ingress.kubernetes.io/enable-cors: "true"
+    spec:
+      ingressClassName: nginx
+      rules:
+        - http:
+            paths:
+              - path: /api/acc(/|$)(.*)
+                pathType: Prefix
+                backend:
+                  service:
+                    name: accumulator-service
+                    port:
+                      number: 8080
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # HPA — auto-scaling for VG and Issuer
+  # ─────────────────────────────────────────────────────────────────────────
+
+  - apiVersion: autoscaling/v2
+    kind: HorizontalPodAutoscaler
+    metadata:
+      name: verification-gateway-hpa
+      namespace: ssi-network
+    spec:
+      scaleTargetRef:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: verification-gateway
+      minReplicas: 2
+      maxReplicas: 10
+      metrics:
+        - type: Resource
+          resource:
+            name: cpu
+            target:
+              type: Utilization
+              averageUtilization: 60
+
+  - apiVersion: autoscaling/v2
+    kind: HorizontalPodAutoscaler
+    metadata:
+      name: issuer-agent-hpa
+      namespace: ssi-network
+    spec:
+      scaleTargetRef:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: issuer-agent
+      minReplicas: 2
+      maxReplicas: 5
+      metrics:
+        - type: Resource
+          resource:
+            name: cpu
+            target:
+              type: Utilization
+              averageUtilization: 60
