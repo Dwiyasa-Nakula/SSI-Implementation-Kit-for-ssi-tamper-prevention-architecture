@@ -838,8 +838,8 @@ items:
         spec:
           containers:
             - name: gateway-middleware
-              image: dn06/ssi:gateway-middleware-v2
-              imagePullPolicy: IfNotPresent
+              image: dn06/ssi:gateway-middleware-v3
+              imagePullPolicy: Always
               resources:
                 requests:
                   cpu: "100m"

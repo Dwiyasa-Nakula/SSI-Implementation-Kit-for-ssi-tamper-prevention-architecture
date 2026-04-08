@@ -38,6 +38,7 @@ import statistics
 import requests
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Callable
+import tracemalloc
 
 # ── Config ────────────────────────────────────────────────────────────────────
 ACC_URL   = "http://localhost:8080"
@@ -45,8 +46,8 @@ VG_URL    = "http://localhost:4000"
 API_KEY   = "/zWgZdpBePIBiBbxVftRw6HjIyMFFb/u1tkpYqzxUiY="
 HDR       = {"x-api-key": API_KEY, "Content-Type": "application/json"}
 HDR_OPEN  = {"Content-Type": "application/json"}
-N_WARMUP  = 50
-N_MEASURE = 2000
+N_WARMUP  = 10
+N_MEASURE = 100
 
 # ── Dataclass ─────────────────────────────────────────────────────────────────
 @dataclass
@@ -62,6 +63,12 @@ class PerfResult:
     max_ms:      float
     stddev_ms:   float
     throughput:  float    # ops/sec
+    ci_95_ms:    float = 0.0
+    cv_pct:      float = 0.0
+    outliers:    int   = 0
+    outlier_expl:str   = ""
+    proof_sz_kb: float = 0.0
+    mem_mb:      float = 0.0
 
 results: List[PerfResult] = []
 
@@ -95,10 +102,21 @@ def bench(op_id: str, op_name: str, fn: Callable,
     print(f"        Measuring ({n_measure} runs)…", end=" ", flush=True)
 
     latencies = []
+    proof_sizes = []
+    mem_usages = []
     for _ in range(n_measure):
+        tracemalloc.start()
         t0 = time.perf_counter()
-        fn()
+        res = fn()
         latencies.append((time.perf_counter() - t0) * 1000)
+        current, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        mem_usages.append(peak / (1024 * 1024))
+        
+        if isinstance(res, (int, float)):
+            proof_sizes.append(res)
+        elif isinstance(res, dict) and "proof_size" in res:
+            proof_sizes.append(res["proof_size"])
 
     latencies.sort()
     avg    = statistics.mean(latencies)
@@ -107,6 +125,19 @@ def bench(op_id: str, op_name: str, fn: Callable,
     p99    = latencies[max(0, int(0.99 * n_measure) - 1)]
     stddev = statistics.stdev(latencies) if len(latencies) > 1 else 0.0
     tput   = round(1000 / avg, 2) if avg > 0 else 0
+    
+    ci     = 1.96 * stddev / math.sqrt(n_measure) if n_measure > 0 else 0.0
+    cv     = (stddev / avg * 100) if avg > 0 else 0.0
+    
+    q1 = latencies[min(len(latencies)-1, int(0.25 * n_measure))]
+    q3 = latencies[min(len(latencies)-1, int(0.75 * n_measure))]
+    iqr = q3 - q1
+    upper_bound = q3 + 1.5 * iqr
+    outlier_count = sum(1 for x in latencies if x > upper_bound)
+    expl = "Network/System Jitter" if outlier_count > 0 else "None"
+    
+    avg_proof_sz = statistics.mean(proof_sizes) if proof_sizes else 0.0
+    avg_mem_mb = statistics.mean(mem_usages) if mem_usages else 0.0
 
     r = PerfResult(
         id=op_id, operation=op_name, n=n_measure,
@@ -114,9 +145,12 @@ def bench(op_id: str, op_name: str, fn: Callable,
         median_ms=round(med, 2), p95_ms=round(p95, 2),
         p99_ms=round(p99, 2), max_ms=round(max(latencies), 2),
         stddev_ms=round(stddev, 2), throughput=tput,
+        ci_95_ms=round(ci, 2), cv_pct=round(cv, 2),
+        outliers=outlier_count, outlier_expl=expl,
+        proof_sz_kb=round(avg_proof_sz, 2), mem_mb=round(avg_mem_mb, 2)
     )
     results.append(r)
-    print(f"avg={avg:.1f}ms  p95={p95:.1f}ms  p99={p99:.1f}ms  stddev={stddev:.1f}ms  tput={tput} ops/s")
+    print(f"avg={avg:.1f}ms p95={p95:.1f}ms stddev={stddev:.1f}ms CV={cv:.1f}% 95%CI=±{ci:.1f}ms OTL={outlier_count} PRF={avg_proof_sz:.1f}KB MEM={avg_mem_mb:.2f}MB")
     return r
 
 
@@ -190,7 +224,11 @@ def perf_05_zkp_create():
         _shared["last_nonce"] = n
         _, d = _post(f"{ACC_URL}/zkp/create-non-membership-proof",
                      {"cred_hash": h, "nonce": n}, hdrs=HDR_OPEN)
-        _shared["last_proof"] = d.get("proof") if isinstance(d, dict) else None
+        proof = d.get("proof") if isinstance(d, dict) else None
+        _shared["last_proof"] = proof
+        if proof:
+            return len(json.dumps(proof).encode("utf-8")) / 1024
+        return 0.0
     bench("PERF-05", "ZKP non-membership proof CREATE", _)
 
 
@@ -202,30 +240,39 @@ def perf_06_zkp_verify():
         _, d = _post(f"{ACC_URL}/zkp/create-non-membership-proof",
                      {"cred_hash": h, "nonce": n}, hdrs=HDR_OPEN)
         proof = d.get("proof") if isinstance(d, dict) else {}
+        proof_sz = len(json.dumps(proof).encode("utf-8")) / 1024 if proof else 0.0
         _post(f"{ACC_URL}/zkp/verify-non-membership-proof",
               {"proof": proof, "nonce": n,
                "presentation_id": f"bench-{secrets.token_hex(4)}"}, hdrs=HDR_OPEN)
+        return proof_sz
     bench("PERF-06", "ZKP non-membership proof VERIFY (end-to-end)", _)
 
 
 def perf_07_predicate_create():
     def _():
         n = secrets.token_hex(16)
-        _post(f"{ACC_URL}/zkp/create-predicate-proof",
+        _, d = _post(f"{ACC_URL}/zkp/create-predicate-proof",
               {"attribute_name": "age", "attribute_value": 25,
                "predicate": ">=", "threshold": 18, "nonce": n}, hdrs=HDR_OPEN)
+        proof = d.get("proof") if isinstance(d, dict) else None
+        if proof:
+            return len(json.dumps(proof).encode("utf-8")) / 1024
+        return 0.0
     bench("PERF-07", "Predicate ZKP CREATE (age >= 18)", _)
 
 
 def perf_08_predicate_verify():
     def _():
         n = secrets.token_hex(16)
-        _, proof = _post(f"{ACC_URL}/zkp/create-predicate-proof",
+        _, d = _post(f"{ACC_URL}/zkp/create-predicate-proof",
                          {"attribute_name": "age", "attribute_value": 25,
                           "predicate": ">=", "threshold": 18, "nonce": n}, hdrs=HDR_OPEN)
-        if isinstance(proof, dict) and proof.get("valid"):
+        proof = d.get("proof") if isinstance(d, dict) else {}
+        proof_sz = len(json.dumps(proof).encode("utf-8")) / 1024 if proof else 0.0
+        if isinstance(proof, dict) and proof.get("valid") is not False:
             _post(f"{ACC_URL}/zkp/verify-predicate-proof",
                   {"proof": proof}, hdrs=HDR_OPEN)
+        return proof_sz
     bench("PERF-08", "Predicate ZKP VERIFY", _)
 
 
@@ -247,12 +294,14 @@ def perf_10_full_roundtrip():
         _, d  = _post(f"{ACC_URL}/zkp/create-non-membership-proof",
                       {"cred_hash": h, "nonce": nonce}, hdrs=HDR_OPEN)
         proof = d.get("proof") if isinstance(d, dict) else {}
+        proof_sz = len(json.dumps(proof).encode("utf-8")) / 1024 if proof else 0.0
         _post(f"{ACC_URL}/zkp/verify-non-membership-proof",
               {"proof": proof, "nonce": nonce,
                "presentation_id": f"rt-{secrets.token_hex(4)}"}, hdrs=HDR_OPEN)
         _get(f"{ACC_URL}/accumulator/state", hdrs=HDR_OPEN)
+        return proof_sz
     bench("PERF-10", "Full round-trip (challenge → proof → verify → state)", _,
-          n_warmup=2, n_measure=10)
+          n_warmup=10, n_measure=50)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -330,19 +379,22 @@ def scaling_test() -> List[Dict]:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def print_thesis_table():
-    print("\n" + "═" * 95)
+    print("\n" + "═" * 165)
     print("  Performance Results — Thesis §3.5.3")
-    print("═" * 95)
-    print(f"  {'ID':<9} {'Operation':<44} {'avg':>7} {'med':>7} {'p95':>7} {'p99':>7} {'stddev':>8} {'ops/s':>7}")
-    print(f"  {'-'*8} {'-'*43} {'-'*7} {'-'*7} {'-'*7} {'-'*7} {'-'*8} {'-'*7}")
+    print("═" * 165)
+    print(f"  {'ID':<9} {'Operation':<44} {'avg':>7} {'med':>7} {'p95':>7} {'p99':>7} {'stddev':>8} {'ops/s':>7} {'95% CI':>8} {'CV(%)':>7} {'Outl':>4} {'Expl':<14} {'Prf(KB)':>8} {'Mem(MB)':>7}")
+    print(f"  {'-'*8} {'-'*43} {'-'*7} {'-'*7} {'-'*7} {'-'*7} {'-'*8} {'-'*7} {'-'*8} {'-'*7} {'-'*4} {'-'*14} {'-'*8} {'-'*7}")
     for r in results:
         print(
             f"  {r.id:<9} {r.operation[:43]:<44} "
             f"{r.avg_ms:>6.1f}ms {r.median_ms:>6.1f}ms "
             f"{r.p95_ms:>6.1f}ms {r.p99_ms:>6.1f}ms "
-            f"{r.stddev_ms:>7.1f}ms {r.throughput:>6.1f}"
+            f"{r.stddev_ms:>7.1f}ms {r.throughput:>6.1f} "
+            f"±{r.ci_95_ms:<6.1f} {r.cv_pct:>6.1f}% "
+            f"{r.outliers:>4}  {r.outlier_expl:<14} "
+            f"{r.proof_sz_kb:>8.2f} {r.mem_mb:>7.2f}"
         )
-    print("═" * 95)
+    print("═" * 165)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

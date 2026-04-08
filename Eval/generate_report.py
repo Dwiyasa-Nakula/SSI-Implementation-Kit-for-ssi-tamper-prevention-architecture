@@ -303,22 +303,24 @@ def section_performance(data: dict, st) -> list:
     ]
 
     # Main benchmark table
-    tdata = [["ID", "Operation", "avg (ms)", "median", "p95", "p99", "stddev", "ops/s"]]
+    tdata = [["ID", "Operation", "avg", "p95", "p99", "stddev", "ops/s", "±95%CI", "CV%", "Prf(KB)", "Mem(MB)"]]
     for b in benches:
         tdata.append([
             Paragraph(b["id"], st["CellB"]),
-            Paragraph(b["operation"][:42], st["Cell"]),
+            Paragraph(b["operation"][:32], st["Cell"]),
             Paragraph(f"{b['avg_ms']:.1f}", st["CellC"]),
-            Paragraph(f"{b['median_ms']:.1f}", st["CellC"]),
             Paragraph(f"{b['p95_ms']:.1f}", st["CellC"]),
             Paragraph(f"{b['p99_ms']:.1f}", st["CellC"]),
             Paragraph(f"{b['stddev_ms']:.1f}", st["CellC"]),
-            Paragraph(f"{b['throughput']:.1f}", st["CellC"]),
+            Paragraph(f"{b['throughput']:.0f}", st["CellC"]),
+            Paragraph(f"{b.get('ci_95_ms', 0):.1f}", st["CellC"]),
+            Paragraph(f"{b.get('cv_pct', 0):.0f}", st["CellC"]),
+            Paragraph(f"{b.get('proof_sz_kb', 0):.2f}", st["CellC"]),
+            Paragraph(f"{b.get('mem_mb', 0):.2f}", st["CellC"]),
         ])
 
     elems.append(Table(tdata,
-                        colWidths=[1.5*cm, 6.5*cm, 1.6*cm, 1.6*cm,
-                                   1.6*cm, 1.6*cm, 1.6*cm, 1.4*cm],
+                        colWidths=[1.4*cm, 4.3*cm, 1.1*cm, 1.1*cm, 1.1*cm, 1.2*cm, 1.1*cm, 1.3*cm, 0.9*cm, 1.4*cm, 1.4*cm],
                         style=tbl_style()))
 
     # Scaling table
@@ -435,9 +437,9 @@ def export_csv(data: dict, outpath: str):
             rows.append({
                 "section": "Performance §3.5.3", "id": b["id"],
                 "name": b["operation"], "type": "BENCHMARK",
-                "result": f"avg={b['avg_ms']}ms p95={b['p95_ms']}ms",
-                "component": f"throughput={b['throughput']} ops/s",
-                "latency_ms": b["avg_ms"], "notes": f"stddev={b['stddev_ms']}ms",
+                "result": f"avg={b['avg_ms']}ms p95={b['p95_ms']}ms CI=±{b.get('ci_95_ms',0)} CV={b.get('cv_pct',0)}%",
+                "component": f"throughput={b['throughput']} ops/s Prf={b.get('proof_sz_kb',0)}KB Mem={b.get('mem_mb',0)}MB",
+                "latency_ms": b["avg_ms"], "notes": f"stddev={b['stddev_ms']}ms Outl={b.get('outliers',0)} Expl={b.get('outlier_expl','')}",
             })
 
     if data.get("rp_simulator"):

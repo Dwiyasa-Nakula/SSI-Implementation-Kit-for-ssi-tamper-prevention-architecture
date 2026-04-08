@@ -68,17 +68,19 @@ const signer = new ThresholdSigner({
 // Redis client
 // ---------------------------------------------------------------------------
  
-function buildRedisUrl(base, password) {
-  if (!password) return base;
-  const u = new URL(base);
-  u.password = encodeURIComponent(password);
-  return u.toString();
-}
- 
 const redisClient = createClient({
-  url: buildRedisUrl(REDIS_URL, process.env.REDIS_PASSWORD),
+  url: REDIS_URL,
+  password: process.env.REDIS_PASSWORD || undefined,
+  socket: {
+    reconnectStrategy: (retries) => {
+      if (retries > 20) return new Error('Redis: too many retries');
+      return Math.min(retries * 100, 3000);   // exponential backoff up to 3s
+    },
+  },
 });
-redisClient.on('error', err => console.error('[Redis] Error:', err));
+redisClient.on('error',        err => console.error('[Redis] Client Error', err.message));
+redisClient.on('connect',      ()  => console.log('[Redis] Client connected successfully.'));
+redisClient.on('reconnecting', ()  => console.log('[Redis] Reconnecting…'));
  
 // ---------------------------------------------------------------------------
 // Auth middleware
@@ -220,7 +222,7 @@ const PORT = 4000;
  
 async function startServer() {
   await redisClient.connect();
-  console.log('[Redis] Connected');
+  console.log('[Redis] Connected and ready');
  
   // Rate limiter
   const limiter = rateLimit({
