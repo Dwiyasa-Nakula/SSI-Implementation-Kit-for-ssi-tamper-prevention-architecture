@@ -59,15 +59,16 @@ ssi-production-kit/
 
 ### Core Components & Technologies
 
-1. **VDR (Verifiable Data Registry):** Uses Hyperledger Indy deployed locally via VON-Network.
-2. **Identity Agents:** Uses Aries Cloud Agent Python (ACA-Py) for **Issuer** and **Verifier** roles.
-3. **Governance Service (Tamper Prevention):** Custom Node.js service implementing **Threshold Signatures (k-of-n)** to prevent unilateral credential revocation by a single admin.
-4. **Verification Gateway:** Node.js middleware handling credential verification, **Distributed Rate Limiting** (via Redis), and audit trail logging.
-5. **Transparency Log:** Uses Sigstore Trillian & Rekor to provide **immutable** Merkle Tree-based audit logs.
-6. **Databases:**
-   - **PostgreSQL:** Wallet storage for ACA-Py.
-   - **MySQL 8.0:** Merkle Tree storage backend for Trillian.
-   - **Redis:** State management for Rate Limiting and Governance quorum.
+1. **VDR (Verifiable Data Registry):** Uses **Hyperledger Indy** (4-node) running natively as a cluster inside Kubernetes.
+2. **Identity Agents:** Uses **Aries Cloud Agent Python (ACA-Py)** for **Issuer**, **Holder**, and **Verifier** roles.
+3. **Accumulator Service**: Service managing revocation status using a cryptographic RSA Accumulator structure with zero-knowledge non-membership proofs (ZKP) and *Fraud Detection* monitoring.
+4. **Governance Service (Tamper Prevention):** Custom Node.js service implementing **Threshold Signatures (k-of-n)** for multi-admins. Prevents unilateral credential revocation by a single entity.
+5. **Verification Gateway:** Node.js middleware handling credential verification, **Distributed Rate Limiting** protection (via Redis), and audit trail logging.
+6. **Transparency Log:** Uses **Sigstore Trillian** & **Rekor** to provide **immutable** Merkle Tree-based verification audit logs.
+7. **Databases:**
+   - **PostgreSQL:** Secure wallet storage for ACA-Py.
+   - **MySQL 8.0:** Merkle Tree data storage for Sigstore Trillian.
+   - **Redis:** State management for Rate Limiting, Accumulator cache, and Governance quorum.
 
 ---
 
@@ -75,14 +76,15 @@ ssi-production-kit/
 
 | Conceptual Component         | Technology / Implementation | Location / Namespace                 | Port                      |
 | ---------------------------- | --------------------------- | ------------------------------------ | ------------------------- |
-| **VDR (Ledger)**       | Hyperledger Indy (VON)      | External (Docker Host)               | 9000 (Web), 9701–9708    |
-| **Issuer Agent**       | ACA-Py (Government Issuer)  | `ssi-network/issuer-agent`         | 8000 (CDTP), 8001 (Admin) |
-| **Verifier Agent**     | ACA-Py (Sidecar)            | `ssi-network/verification-gateway` | 8020 (CDTP), 8021 (Admin) |
-| **Tamper Prevention**  | Governance Service          | `ssi-network/governance-service`   | 3000                      |
-| **Verification Logic** | Verification Gateway        | `ssi-network/verification-gateway` | 4000                      |
-| **Transparency Log**   | Rekor Server                | `ssi-network/rekor-server`         | 3000                      |
-| **Log Backend**        | Trillian Log Server         | `ssi-network/trillian-log-server`  | 8090 (HTTP), 8091 (gRPC)  |
-| **Immutable Storage**  | MySQL 8.0                   | `ssi-network/trillian-mysql`       | 3306                      |
+| **VDR (Ledger)**             | Hyperledger Indy (4-Node)   | `ssi-network` (von-webserver)        | 8000 (Web), 9701-9708     |
+| **ZKP Accumulator**          | Fast API Accumulator        | `ssi-network/accumulator-service`    | 8080                      |
+| **Issuer Agent**             | ACA-Py (Government Issuer)  | `ssi-network/issuer-agent`           | 8000 (CDTP), 8001 (Admin) |
+| **Verifier Agent**           | ACA-Py (Sidecar)            | `ssi-network/verification-gateway`   | 8020 (CDTP), 8021 (Admin) |
+| **Tamper Prevention**        | Governance Service          | `ssi-network/governance-service`     | 3000                      |
+| **Verification Logic**       | Verification Gateway        | `ssi-network/verification-gateway`   | 4000                      |
+| **Transparency Log**         | Rekor Server                | `ssi-network/rekor-server`           | 3000                      |
+| **Log Backend**              | Trillian Log Server         | `ssi-network/trillian-log-server`    | 8090 (HTTP), 8091 (gRPC)  |
+| **Immutable Storage**        | MySQL 8.0                   | `ssi-network/trillian-mysql`         | 3306                      |
 
 ---
 
@@ -97,23 +99,7 @@ ssi-production-kit/
 
 ---
 
-### 2. Setup Local Indy Ledger (VON-Network)
-
-The system requires a running Indy network. We use `von-network` for local simulation.
-
-```powershell
-# Run outside this repository directory
-git clone https://github.com/bcgov/von-network.git
-cd von-network
-./manage build
-./manage start
-```
-
-Ensure the Web UI is accessible at: `http://localhost:9000`
-
----
-
-### 3. Build & Deploy SSI Kit
+### 2. Build & Deploy SSI Kit
 
 #### Build Local Images
 

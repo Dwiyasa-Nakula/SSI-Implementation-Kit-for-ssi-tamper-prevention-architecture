@@ -52,28 +52,30 @@ ssi-production-kit/
 
 ### Komponen Utama & Teknologi
 
-1. **VDR (Verifiable Data Registry)**: Menggunakan **Hyperledger Indy** yang dideploy secara lokal via **VON-Network**.
-2. **Identity Agents**: Menggunakan **Aries Cloud Agent Python (ACA-Py)** untuk peran **Issuer** dan **Verifier**.
-3. **Governance Service (Tamper Prevention)**: Layanan Node.js kustom yang mengimplementasikan **Threshold Signatures (k-of-n)**. Mencegah manipulasi pencabutan kredensial (Revocation) oleh admin tunggal.
-4. **Verification Gateway**: Middleware Node.js yang menangani verifikasi kredensial, **Distributed Rate Limiting** (via **Redis**), dan pencatatan audit trail.
-5. **Transparency Log**: Menggunakan **Sigstore Trillian** & **Rekor** untuk menyediakan log audit yang **Immutable** (tidak dapat diubah) berbasis Merkle Tree.
-6. **Databases**:
-   * **PostgreSQL**: Penyimpanan Wallet untuk ACA-Py.
-   * **MySQL 8.0**: Penyimpanan data Merkle Tree untuk Trillian.
-   * **Redis**: State management untuk Rate Limiting dan Governance quorum.
+1. **VDR (Verifiable Data Registry)**: Menggunakan **Hyperledger Indy** (4-nodes) yang berjalan kluster lokal (VON-Network).
+2. **Identity Agents**: Menggunakan **Aries Cloud Agent Python (ACA-Py)** untuk peran **Issuer**, **Holder**, dan **Verifier**.
+3. **Accumulator Service**: Layanan pengelolaan status pencabutan menggunakan struktur kriptografi RSA Accumulator dengan bukti non-membership (ZKP) dan monitor *Fraud Detection*.
+4. **Governance Service (Tamper Prevention)**: Layanan Node.js kustom yang mengimplementasikan **Threshold Signatures (k-of-n)** bagi multi-admin. Mencegah manipulasi pencabutan kredensial oleh admin tunggal.
+5. **Verification Gateway**: Middleware Node.js yang menangani verifikasi kredensial, proteksi **Distributed Rate Limiting** (via **Redis**), dan pencatatan audit trail.
+6. **Transparency Log**: Menggunakan **Sigstore Trillian** & **Rekor** untuk menyediakan log audit verifikasi yang **Immutable** (tidak dapat diubah) berbasis Merkle Tree.
+7. **Databases**:
+   * **PostgreSQL**: Penyimpanan Wallet aman untuk ACA-Py.
+   * **MySQL 8.0**: Penyimpanan data Merkle Tree untuk Sigstore Trillian.
+   * **Redis**: State management untuk Rate Limiting, Accumulator cache, dan Governance quorum.
 
 ## 🗺️ Pemetaan Arsitektur (Architecture Mapping)
 
 | Komponen Konseptual          | Teknologi / Implementasi   | Lokasi / Namespace                   | Port                      |
 | :--------------------------- | :------------------------- | :----------------------------------- | :------------------------ |
-| **VDR (Ledger)**       | Hyperledger Indy (VON)     | External (Docker Host)               | 9000 (Web), 9701-9708     |
-| **Issuer Agent**       | ACA-Py (Government Issuer) | `ssi-network/issuer-agent`         | 8000 (CDTP), 8001 (Admin) |
-| **Verifier Agent**     | ACA-Py (Sidecar)           | `ssi-network/verification-gateway` | 8020 (CDTP), 8021 (Admin) |
-| **Tamper Prevention**  | Governance Service         | `ssi-network/governance-service`   | 3000                      |
-| **Verification Logic** | Verification Gateway       | `ssi-network/verification-gateway` | 4000                      |
-| **Transparency Log**   | Rekor Server               | `ssi-network/rekor-server`         | 3000                      |
-| **Log Backend**        | Trillian Log Server        | `ssi-network/trillian-log-server`  | 8090 (HTTP), 8091 (gRPC)  |
-| **Immutable Storage**  | MySQL 8.0                  | `ssi-network/trillian-mysql`       | 3306                      |
+| **VDR (Ledger)**             | Hyperledger Indy (4-Node)  | `ssi-network` (von-webserver)        | 8000 (Web), 9701-9708     |
+| **ZKP Accumulator**          | Fast API Accumulator       | `ssi-network/accumulator-service`    | 8080                      |
+| **Issuer Agent**             | ACA-Py (Government Issuer) | `ssi-network/issuer-agent`           | 8000 (CDTP), 8001 (Admin) |
+| **Verifier Agent**           | ACA-Py (Sidecar)           | `ssi-network/verification-gateway`   | 8020 (CDTP), 8021 (Admin) |
+| **Tamper Prevention**        | Governance Service         | `ssi-network/governance-service`     | 3000                      |
+| **Verification Logic**       | Verification Gateway       | `ssi-network/verification-gateway`   | 4000                      |
+| **Transparency Log**         | Rekor Server               | `ssi-network/rekor-server`           | 3000                      |
+| **Log Backend**              | Trillian Log Server        | `ssi-network/trillian-log-server`    | 8090 (HTTP), 8091 (gRPC)  |
+| **Immutable Storage**        | MySQL 8.0                  | `ssi-network/trillian-mysql`         | 3306                      |
 
 ## 🏗️ Cara Menjalankan (Setup Guide)
 
@@ -83,21 +85,7 @@ ssi-production-kit/
 * **kubectl** CLI.
 * **Git** & **Python 3**.
 
-### 2. Setup Local Indy Ledger (VON-Network)
-
-Sistem memerlukan jaringan Indy yang berjalan. Kita menggunakan `von-network` untuk simulasi lokal.
-
-```powershell
-# Jalankan di directory di luar repository ini
-git clone https://github.com/bcgov/von-network.git
-cd von-network
-./manage build
-./manage start
-```
-
-*Pastikan Web UI dapat diakses di `http://localhost:9000`.*
-
-### 3. Build & Deploy SSI Kit
+### 2. Build & Deploy SSI Kit
 
 1. **Build Local Images**:
 
@@ -149,9 +137,11 @@ Proyek ini menyertakan skrip Python untuk melakukan simulasi siklus hidup SSI le
 
 ```powershell
 # 1. Buka 3 terminal terpisah dan lakukan port-forward layanan K8s
-kubectl port-forward svc/issuer-agent 8001:8001 -n ssi-network
+kubectl port-forward svc/governance-service 3000:3000 -n ssi-network
 kubectl port-forward svc/verification-gateway 4000:4000 -n ssi-network
+kubectl port-forward svc/issuer-agent 8001:8001 -n ssi-network
 kubectl port-forward svc/holder-agent 8031:8031 -n ssi-network
+kubectl port-forward svc/accumulator-service 8080:8080 -n ssi-network
 
 # 2. Jalankan skrip E2E di terminal baru
 python src/test_e2e.py
