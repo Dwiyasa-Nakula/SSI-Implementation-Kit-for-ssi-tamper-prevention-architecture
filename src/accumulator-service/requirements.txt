@@ -3,5 +3,5 @@ uvicorn[standard]==0.24.0
 sympy==1.12
 pydantic==2.5.0
 redis==5.0.1
-cryptography==46.0.6
+cryptography==46.0.7
 httpx==0.25.2
