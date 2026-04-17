@@ -253,13 +253,22 @@ async function startServer() {
       if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
  
       try {
-        // Create proof request via ACA-Py
+        // Send proof request to holder via ACA-Py (v2 API)
+        const connectionId = req.body.connection_id;
         const acaResp = await axios.post(
-          `${AGENT_ADMIN_URL}/present-proof/create-request`,
-          { proof_request: req.body.proof_request_data, trace: false }
+          `${AGENT_ADMIN_URL}/present-proof-2.0/send-request`,
+          {
+            connection_id: connectionId,
+            presentation_request: {
+              indy: req.body.proof_request_data,
+            },
+            trace: false,
+          }
         );
  
-        const { presentation_exchange_id, presentation_request } = acaResp.data;
+        // v2 API uses pres_ex_id
+        const presentation_exchange_id = acaResp.data.pres_ex_id || acaResp.data.presentation_exchange_id;
+        const presentation_request = acaResp.data.pres_request || acaResp.data.presentation_request;
  
         // Store session
         await redisClient.set(
@@ -268,6 +277,7 @@ async function startServer() {
             timestamp: new Date().toISOString(),
             status:    'REQUEST_SENT',
             requestor: req.user.id,
+            connection_id: connectionId,
             zkp_proof: req.body.zkp_proof || null,   // Optional ZKP from holder
           }),
           { EX: 3600 }
@@ -330,14 +340,15 @@ async function startServer() {
   });
  
   // ── Webhook from ACA-Py ───────────────────────────────────────────────────
-  app.post('/webhooks/topic/present_proof/', async (req, res, next) => {
+  const handleProofWebhook = async (req, res, next) => {
     const webhookKey = req.headers['x-api-key'];
     if (WEBHOOK_SECRET && webhookKey !== WEBHOOK_SECRET && req.ip !== '127.0.0.1') {
       return res.status(401).json({ error: 'Unauthorized webhook' });
     }
  
     try {
-      const { state, presentation_exchange_id, verified } = req.body;
+      const { state, verified } = req.body;
+      const presentation_exchange_id = req.body.pres_ex_id || req.body.presentation_exchange_id;
  
       if (state === 'verified' && (verified === 'true' || verified === true)) {
         const sessionRaw = await redisClient.get(`session:${presentation_exchange_id}`);
@@ -358,8 +369,11 @@ async function startServer() {
  
       return res.status(200).send();
     } catch (err) { next(err); }
-  });
- 
+  };
+
+  app.post('/webhooks/topic/present_proof/', handleProofWebhook);
+  app.post('/webhooks/topic/present_proof_v2_0/', handleProofWebhook);
+
   // ── Error handler ─────────────────────────────────────────────────────────
   app.use((err, req, res, _next) => {
     console.error('[Error]', err);

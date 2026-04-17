@@ -85,8 +85,19 @@ items:
             - podSelector: { matchLabels: { app: holder-agent } }
             - podSelector: { matchLabels: { app: verification-gateway } }
           ports: [{ port: 8000 }]
-      
 
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: allow-didcomm-holder
+      namespace: ssi-network
+    spec:
+      podSelector: { matchLabels: { app: holder-agent } }
+      ingress:
+        - from: 
+            - podSelector: { matchLabels: { app: issuer-agent } }
+            - podSelector: { matchLabels: { app: verification-gateway } }
+          ports: [{ port: 8030 }]
 
   - apiVersion: networking.k8s.io/v1
     kind: NetworkPolicy
@@ -524,13 +535,14 @@ items:
           labels:
             app: rekor-server
         spec:
+          enableServiceLinks: false
           containers:
             - name: rekor-server
               image: gcr.io/projectsigstore/rekor-server:v1.3.0
               command: ["rekor-server", "serve"]
               args:
                 - "--trillian_log_server.address=trillian-log-server:8091"
-                - "--trillian_log_server.tlog_id=3847170233833341573"
+                - "--trillian_log_server.tlog_id=6863132224160156518"
                 - "--log_type=dev"
               ports:
                 - containerPort: 3000
@@ -629,6 +641,9 @@ items:
                 - "--auto-accept-invites"
                 - "--auto-accept-requests"
                 - "--auto-ping-connection"
+                - "--auto-respond-credential-request"
+                - "--auto-respond-presentation-request"
+                - "--auto-respond-presentation-proposal"
                 - "--log-level"
                 - "debug"
                 - "--webhook-url"
@@ -731,6 +746,7 @@ items:
                 - "--auto-accept-invites"
                 - "--auto-accept-requests"
                 - "--auto-ping-connection"
+                - "--auto-store-credential"
                 - "--log-level"
                 - "debug"
               readinessProbe:
@@ -844,7 +860,7 @@ items:
         spec:
           containers:
             - name: gateway-middleware
-              image: dn06/ssi:gateway-middleware-v2
+              image: dn06/ssi:gateway-middleware-v4
               imagePullPolicy: IfNotPresent
               resources:
                 requests:
@@ -943,6 +959,13 @@ items:
                 - "--auto-accept-invites"
                 - "--auto-accept-requests"
                 - "--auto-ping-connection"
+                - "--auto-respond-presentation-request"
+                - "--auto-verify-presentation"
+                - "--preserve-exchange-records"
+                - "--webhook-url"
+                - "http://host.docker.internal:8888/webhooks"
+                - "--log-level"
+                - "debug"
               env:
                 - name: WALLET_KEY
                   valueFrom:
