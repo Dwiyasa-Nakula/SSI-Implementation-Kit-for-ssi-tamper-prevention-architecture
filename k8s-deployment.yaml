@@ -45,6 +45,22 @@ items:
             - protocol: TCP
               port: 8030
             - protocol: TCP
+              port: 3306 # MySQL
+            - protocol: TCP
+              port: 5432 # Postgres
+            - protocol: TCP
+              port: 6379 # Redis
+            - protocol: TCP
+              port: 8091 # Trillian RPC
+            - protocol: TCP
+              port: 3000 # Rekor/Gov API
+            - protocol: TCP
+              port: 8080 # Accumulator API
+            - protocol: TCP
+              port: 8001 # Issuer Admin API
+            - protocol: TCP
+              port: 4000 # VG API
+            - protocol: TCP
               port: 9701
             - protocol: TCP
               port: 9702
@@ -208,6 +224,8 @@ items:
                   value: "wallets"
               ports:
                 - containerPort: 5432
+              command: ["docker-entrypoint.sh"]
+              args: ["postgres", "-c", "max_connections=500"]
               volumeMounts:
                 - name: db-data
                   mountPath: /var/lib/postgresql/data
@@ -632,7 +650,7 @@ items:
                 - "--wallet-storage-type"
                 - "postgres"
                 - "--wallet-storage-config"
-                - '{"url":"wallet-db:5432","max_connections":50}'
+                - '{"url":"wallet-db:5432","max_connections":20}'
                 - "--wallet-storage-creds"
                 - "$(WALLET_CREDS)"
                 - "--genesis-url"
@@ -664,13 +682,13 @@ items:
                 httpGet:
                   path: /status
                   port: 8001
-                initialDelaySeconds: 20
+                initialDelaySeconds: 60
                 periodSeconds: 10
               livenessProbe:
                 httpGet:
                   path: /status
                   port: 8001
-                initialDelaySeconds: 60
+                initialDelaySeconds: 90
                 periodSeconds: 20
 
 
@@ -823,7 +841,7 @@ items:
                 httpGet:
                   path: /health
                   port: 3000
-                initialDelaySeconds: 10
+                initialDelaySeconds: 60
                 periodSeconds: 10
           imagePullSecrets:
             - name: dockerhub-secret
@@ -849,7 +867,7 @@ items:
       name: verification-gateway
       namespace: ssi-network
     spec:
-      replicas: 3 
+      replicas: 3
       selector:
         matchLabels:
           app: verification-gateway
@@ -950,7 +968,7 @@ items:
                 - "--wallet-storage-type"
                 - "postgres"
                 - "--wallet-storage-config"
-                - '{"url":"wallet-db:5432","max_connections":50}'
+                - '{"url":"wallet-db:5432","max_connections":20}'
                 - "--wallet-storage-creds"
                 - "$(WALLET_CREDS)"
                 - "--genesis-url"
@@ -982,13 +1000,13 @@ items:
                 httpGet:
                   path: /status
                   port: 8021
-                initialDelaySeconds: 20
+                initialDelaySeconds: 60
                 periodSeconds: 10
               livenessProbe:
                 httpGet:
                   path: /status
                   port: 8021
-                initialDelaySeconds: 60
+                initialDelaySeconds: 90
                 periodSeconds: 20
 
           imagePullSecrets:

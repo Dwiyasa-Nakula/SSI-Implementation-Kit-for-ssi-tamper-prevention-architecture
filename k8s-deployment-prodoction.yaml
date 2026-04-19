@@ -45,6 +45,22 @@ items:
             - protocol: TCP
               port: 8030
             - protocol: TCP
+              port: 3306 # MySQL
+            - protocol: TCP
+              port: 5432 # Postgres
+            - protocol: TCP
+              port: 6379 # Redis
+            - protocol: TCP
+              port: 8091 # Trillian RPC
+            - protocol: TCP
+              port: 3000 # Rekor/Gov API
+            - protocol: TCP
+              port: 8080 # Accumulator API
+            - protocol: TCP
+              port: 8001 # Issuer Admin API
+            - protocol: TCP
+              port: 4000 # VG API
+            - protocol: TCP
               port: 9701
             - protocol: TCP
               port: 9702
@@ -98,7 +114,7 @@ items:
             - podSelector: { matchLabels: { app: issuer-agent } }
             - podSelector: { matchLabels: { app: verification-gateway } }
           ports: [{ port: 8030 }]
-    
+
   - apiVersion: networking.k8s.io/v1
     kind: NetworkPolicy
     metadata:
@@ -191,10 +207,10 @@ items:
               imagePullPolicy: IfNotPresent
               resources:
                 requests:
-                  cpu: "2"
+                  cpu: "1"
                   memory: "4Gi"
                 limits:
-                  cpu: "6"
+                  cpu: "4"
                   memory: "16Gi"
               env:
                 - name: POSTGRES_USER
@@ -208,6 +224,8 @@ items:
                   value: "wallets"
               ports:
                 - containerPort: 5432
+              command: ["docker-entrypoint.sh"]
+              args: ["postgres", "-c", "max_connections=500"]
               volumeMounts:
                 - name: db-data
                   mountPath: /var/lib/postgresql/data
@@ -632,7 +650,7 @@ items:
                 - "--wallet-storage-type"
                 - "postgres"
                 - "--wallet-storage-config"
-                - '{"url":"wallet-db:5432","max_connections":50}'
+                - '{"url":"wallet-db:5432","max_connections":20}'
                 - "--wallet-storage-creds"
                 - "$(WALLET_CREDS)"
                 - "--genesis-url"
@@ -664,13 +682,13 @@ items:
                 httpGet:
                   path: /status
                   port: 8001
-                initialDelaySeconds: 20
+                initialDelaySeconds: 90
                 periodSeconds: 10
               livenessProbe:
                 httpGet:
                   path: /status
                   port: 8001
-                initialDelaySeconds: 60
+                initialDelaySeconds: 150
                 periodSeconds: 20
 
 
@@ -753,7 +771,7 @@ items:
                 httpGet:
                   path: /status
                   port: 8031
-                initialDelaySeconds: 20
+                initialDelaySeconds: 90
                 periodSeconds: 10
 
   - apiVersion: v1
@@ -823,14 +841,8 @@ items:
                 httpGet:
                   path: /health
                   port: 3000
-                initialDelaySeconds: 10
+                initialDelaySeconds: 90
                 periodSeconds: 10
-              readinessProbe:
-                httpGet:
-                  path: /health
-                  port: 3000
-                initialDelaySeconds: 5
-                periodSeconds: 5
           imagePullSecrets:
             - name: dockerhub-secret
           volumes:
@@ -914,18 +926,6 @@ items:
                       key: API_KEYS
               ports:
                 - containerPort: 4000
-              livenessProbe:
-                httpGet:
-                  path: /health
-                  port: 4000
-                initialDelaySeconds: 15
-                periodSeconds: 15
-              readinessProbe:
-                httpGet:
-                  path: /health
-                  port: 4000
-                initialDelaySeconds: 10
-                periodSeconds: 5
 
             - name: verifier-agent
               image: bcgovimages/aries-cloudagent:py3.12_1.0.0
@@ -968,7 +968,7 @@ items:
                 - "--wallet-storage-type"
                 - "postgres"
                 - "--wallet-storage-config"
-                - '{"url":"wallet-db:5432","max_connections":50}'
+                - '{"url":"wallet-db:5432","max_connections":20}'
                 - "--wallet-storage-creds"
                 - "$(WALLET_CREDS)"
                 - "--genesis-url"
@@ -1000,13 +1000,13 @@ items:
                 httpGet:
                   path: /status
                   port: 8021
-                initialDelaySeconds: 20
+                initialDelaySeconds: 90
                 periodSeconds: 10
               livenessProbe:
                 httpGet:
                   path: /status
                   port: 8021
-                initialDelaySeconds: 60
+                initialDelaySeconds: 150
                 periodSeconds: 20
 
           imagePullSecrets:
@@ -1367,7 +1367,10 @@ items:
                 - name: REGISTER_NEW_DIDS
                   value: "True"
                 - name: LEDGER_INSTANCE_NAME
-                  value: "SSI-Network"
+                  value: "SSI-Network-Dev"
+                - name: LEDGER_SEED
+                  value: "000000000000000000000000Trustee1"
+
               ports:
                 - containerPort: 8000
               resources:
